@@ -288,8 +288,9 @@ test("8. camera overlay: move, resize, reshape, hide; kept after reload", async 
   // Rounded rectangle.
   await page.getByRole("group", { name: "Camera shape" }).getByRole("button", { name: "Rounded" }).click()
   await expect(bubble).toHaveAttribute("data-shape", "rounded")
+  // Saving is asynchronous; wait for it before reloading.
+  await expect.poll(async () => (await readDb(page, "recordings", id)).overlay.shape).toBe("rounded")
   const shaped = (await readDb(page, "recordings", id)).overlay
-  expect(shaped.shape).toBe("rounded")
 
   await page.reload()
   await expect(bubble).toBeVisible({ timeout: 30_000 })
@@ -303,10 +304,10 @@ test("8. camera overlay: move, resize, reshape, hide; kept after reload", async 
   await bubble.click()
   await page.getByRole("group", { name: "Camera shape" }).getByRole("button", { name: "Hide" }).click()
   await expect(bubble).toBeHidden()
+  await expect.poll(async () => (await readDb(page, "recordings", id)).overlay.visible).toBe(false)
   await page.reload()
   await expect(page.getByRole("button", { name: "Show camera" })).toBeVisible({ timeout: 30_000 })
   await expect(bubble).toBeHidden()
-  expect((await readDb(page, "recordings", id)).overlay.visible).toBe(false)
   await page.getByRole("button", { name: "Show camera" }).click()
   await expect(bubble).toBeVisible()
   await expect.poll(async () => (await readDb(page, "recordings", id)).overlay.visible).toBe(true)
