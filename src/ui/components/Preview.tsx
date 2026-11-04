@@ -8,6 +8,7 @@ import { Player } from "../../services/Player.ts"
 import { run } from "../../services/runtime.ts"
 import { overlayRect } from "../../workers/exportProtocol.ts"
 import { playheadAtom, playingAtom, useEditor } from "../editorState.ts"
+import { jumpToEnd, jumpToStart, markerAtom, moveBy, returnToMarker, togglePlay } from "../transport.ts"
 import { Icon } from "../Icon.tsx"
 import { registry, updateRecording } from "../state.ts"
 
@@ -54,8 +55,12 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
       ctl = p
       c.player.current = p
       p.onTime((t) => registry.set(playheadAtom(c.id), t))
-      p.onPlayingChange((v) => registry.set(playingAtom(c.id), v))
-      p.seek(registry.get(playheadAtom(c.id)))
+      p.onPlayingChange((v) => {
+        registry.set(playingAtom(c.id), v)
+        // Like a DAW: when playback stops, the playhead goes back to the start marker.
+        if (!v) returnToMarker(c)
+      })
+      p.seek(registry.get(markerAtom(c.id)))
     })
     return () => {
       destroyed = true
@@ -84,7 +89,7 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
               preload="auto"
               playsInline
               data-testid="screen-video"
-              onClick={() => (playing ? c.player.current?.pause() : c.player.current?.play())}
+              onClick={() => togglePlay(c)}
             />
           )}
           {c.cameraUrl && (
@@ -95,13 +100,28 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
         </div>
       </div>
       <div className="transport">
-        <button
-          className="iconbtn playbtn"
-          aria-label={playing ? "Pause" : "Play"}
-          onClick={() => (playing ? c.player.current?.pause() : c.player.current?.play())}
-        >
-          <Icon name={playing ? "pause" : "play"} />
-        </button>
+        <div className="transport-btns" role="group" aria-label="Playback">
+          <button className="iconbtn" aria-label="Jump to start" title="Jump to start (Home)" onClick={() => jumpToStart(c)}>
+            <Icon name="toStart" />
+          </button>
+          <button className="iconbtn" aria-label="Back 5 seconds" title="Back 5 seconds (←)" onClick={() => moveBy(c, -5000)}>
+            <Icon name="back5" />
+          </button>
+          <button
+            className="iconbtn playbtn"
+            aria-label={playing ? "Stop" : "Play"}
+            title={playing ? "Stop and go back to the start marker (Space)" : "Play from the start marker (Space)"}
+            onClick={() => togglePlay(c)}
+          >
+            <Icon name={playing ? "stop" : "play"} />
+          </button>
+          <button className="iconbtn" aria-label="Forward 5 seconds" title="Forward 5 seconds (→)" onClick={() => moveBy(c, 5000)}>
+            <Icon name="fwd5" />
+          </button>
+          <button className="iconbtn" aria-label="Jump to end" title="Jump to end (End)" onClick={() => jumpToEnd(c)}>
+            <Icon name="toEnd" />
+          </button>
+        </div>
         <span className="tnum" style={{ fontSize: 14, fontWeight: 550 }} data-testid="time">
           <span data-testid="time-now" data-ms={Math.round(now)}>{formatClock(now)}</span>{" "}
           <span style={{ color: "var(--muted)", fontWeight: 400 }}>/ <span data-testid="time-total" data-ms={Math.round(total)}>{formatClock(total)}</span></span>
