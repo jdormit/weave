@@ -48,6 +48,13 @@ bunx wrangler login
 bun run deploy
 ```
 
+CI deploys `main` automatically after the tests pass, once two repository secrets are set (Settings → Secrets and variables → Actions):
+
+- `CLOUDFLARE_API_TOKEN`: an account API token with the **Edit Cloudflare Workers** permissions, scoped to your account.
+- `CLOUDFLARE_ACCOUNT_ID`: your Cloudflare account ID.
+
+Without them, the deploy job skips the deploy and leaves a warning.
+
 Any static host works if it sends these headers on every response, and serves `index.html` for unknown paths:
 
 ```

@@ -32,3 +32,38 @@ jobs:
           path: |
             playwright-report
             test-results
+
+  # Deploys main to Cloudflare Workers after the tests pass. Needs the
+  # CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repository secrets; without
+  # them the job skips the deploy instead of failing.
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Check for Cloudflare secrets
+        id: secrets
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID is not set, so Weave was not deployed."
+          fi
+      - uses: actions/checkout@v4
+        if: steps.secrets.outputs.ok == 'true'
+      - uses: oven-sh/setup-bun@v2
+        if: steps.secrets.outputs.ok == 'true'
+        with:
+          bun-version: 1.4.4
+      - if: steps.secrets.outputs.ok == 'true'
+        run: bun install --frozen-lockfile
+      - name: Build and deploy
+        if: steps.secrets.outputs.ok == 'true'
+        run: bun run deploy
