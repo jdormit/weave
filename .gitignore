@@ -1,0 +1,9 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+e2e/.cache/
+e2e/.downloads/
+.wrangler/
+*.log
+.DS_Store
