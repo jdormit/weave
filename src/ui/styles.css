@@ -227,6 +227,7 @@ kbd { font: inherit; font-size: 11px; font-weight: 550; min-width: 18px; height:
 .shapebar button.on { background: var(--sunken); color: var(--ink); }
 .shapebar .ico { width: 14px; height: 14px; }
 .transport { height: 40px; flex: none; display: flex; align-items: center; gap: 12px; }
+.transport-btns { display: flex; align-items: center; gap: 2px; }
 .playbtn { background: var(--ink) !important; color: var(--bg) !important; border-radius: 50% !important; width: 36px !important; height: 36px !important; }
 .divider { width: 6px; flex: none; cursor: col-resize; background: transparent; border-left: 1px solid var(--line); margin-left: -3px; position: relative; z-index: 2; }
 .divider:hover, .divider.drag { background: var(--accent-soft); }
@@ -272,8 +273,12 @@ kbd { font: inherit; font-size: 11px; font-weight: 550; min-width: 18px; height:
 .trim.l { left: -6px; border-radius: 6px 0 0 6px; }
 .trim.r { right: -6px; border-radius: 0 6px 6px 0; }
 .trim i { display: block; width: 2px; height: 16px; border-radius: 1px; background: var(--accent-ink); opacity: .8; }
+.timeline { user-select: none; -webkit-user-select: none; }
 .playhead { position: absolute; top: 0; bottom: -4px; width: 2px; background: var(--accent); pointer-events: none; z-index: 5; }
 .playhead::before { content: ''; position: absolute; left: -5px; top: 0; width: 12px; height: 12px; border-radius: 2px 2px 6px 6px; background: var(--accent); }
+/* A wider, invisible strip so the playhead is easy to grab. */
+.playhead .grab { position: absolute; top: 0; bottom: 0; left: -7px; width: 16px; pointer-events: auto; cursor: ew-resize; touch-action: none; }
+.marker { position: absolute; top: 0; width: 0; height: 0; margin-left: -6px; border: 6px solid transparent; border-top: 8px solid var(--ink); border-bottom: 0; z-index: 4; pointer-events: none; }
 
 /* Settings */
 h2.sec { margin: 0 0 4px; font-size: 17px; font-weight: 650; }

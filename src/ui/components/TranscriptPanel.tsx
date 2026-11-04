@@ -5,6 +5,7 @@ import type { Word } from "../../domain/schema.ts"
 import { formatClock, paragraphs } from "../../domain/transcriptFormat.ts"
 import { modelInfo } from "../../workers/transcribeProtocol.ts"
 import { playheadAtom, selectionAtom, selectedClipAtom, useEditor } from "../editorState.ts"
+import { moveTo } from "../transport.ts"
 import { Icon } from "../Icon.tsx"
 import { deleteSelection } from "../screens/Editor.tsx"
 import { jobAtom, registry, settingsAtom, startTranscription, updateSettings } from "../state.ts"
@@ -146,13 +147,12 @@ const Words = ({ showCut }: { showCut: boolean }) => {
         registry.set(selectionAtom(c.id), null)
         clickedRef.current = d.anchor
         const w = c.words[d.anchor]
-        if (w) c.player.current?.seek(w.startMs)
-        else registry.set(playheadAtom(c.id), 0)
+        if (w) moveTo(c, w.startMs)
       }
     }
     window.addEventListener("mouseup", up)
     return () => window.removeEventListener("mouseup", up)
-  }, [c.id, c.words, c.player])
+  }, [c])
 
   const onDown = useCallback((i: number, e: React.MouseEvent) => {
     if (e.button !== 0) return
@@ -191,7 +191,7 @@ const Words = ({ showCut }: { showCut: boolean }) => {
         if (!visible) return null
         return (
           <div className="para" key={p.firstIndex}>
-            <button className="ts tnum" onClick={() => c.player.current?.seek(p.startMs)}>
+            <button className="ts tnum" onClick={() => moveTo(c, p.startMs)}>
               {formatClock(sourceToEdited(c.cuts, p.startMs))}
             </button>
             <p className="tx">

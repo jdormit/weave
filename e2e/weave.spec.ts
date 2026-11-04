@@ -123,6 +123,66 @@ test("3. clicking a word moves the playhead to it", async ({ page }) => {
   await words(page).nth(i).click()
   await expect.poll(() => msOf(page, "time-now")).toBeGreaterThanOrEqual(list[i]!.start - 60)
   expect(await msOf(page, "time-now")).toBeLessThan(list[i]!.start + 250)
+  // The click also moves the start marker.
+  await expect(page.getByTestId("marker")).toHaveAttribute("data-ms", String(list[i]!.start))
+})
+
+const markerMs = async (page: Page) => Number(await page.getByTestId("marker").getAttribute("data-ms"))
+
+test("3b. the playhead drags, and playback returns to the start marker like a DAW", async ({ page }) => {
+  const duration = (await readDb(page, "recordings", id)).durationMs
+  const ruler = (await page.getByTestId("ruler").boundingBox())!
+
+  // Drag the playhead along the timeline. Nothing on the page gets text-selected.
+  const grab = page.getByTestId("playhead").locator(".grab")
+  const gb = (await grab.boundingBox())!
+  await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(ruler.x + ruler.width * 0.3, gb.y + gb.height / 2, { steps: 6 })
+  await page.mouse.move(ruler.x + ruler.width * 0.6, gb.y + gb.height / 2, { steps: 6 })
+  await page.mouse.up()
+  await expect.poll(() => msOf(page, "time-now")).toBeGreaterThan(duration * 0.55)
+  expect(await msOf(page, "time-now")).toBeLessThan(duration * 0.65)
+  expect(Math.abs((await markerMs(page)) - (await msOf(page, "time-now")))).toBeLessThan(5)
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("")
+
+  // Jump to the very start with the transport button.
+  await page.getByRole("button", { name: "Jump to start" }).click()
+  await expect.poll(() => msOf(page, "time-now")).toBe(0)
+  expect(await markerMs(page)).toBe(0)
+
+  // Play: the playhead moves, the marker stays. Stop: back to the marker.
+  await page.getByRole("button", { name: "Play", exact: true }).click()
+  await expect.poll(() => msOf(page, "time-now")).toBeGreaterThan(800)
+  expect(await markerMs(page)).toBe(0)
+  await page.getByRole("button", { name: "Stop", exact: true }).click()
+  await expect.poll(() => msOf(page, "time-now")).toBe(0)
+  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible()
+
+  // Click a word, play, stop: the playhead goes back to that word, again and again.
+  const w = (await wordTimes(page))[8]!
+  await words(page).nth(8).click()
+  for (let round = 0; round < 2; round++) {
+    await page.getByRole("button", { name: "Play", exact: true }).click()
+    await expect.poll(() => msOf(page, "time-now")).toBeGreaterThan(w.start + 500)
+    await page.getByRole("button", { name: "Stop", exact: true }).click()
+    await expect.poll(() => msOf(page, "time-now")).toBe(w.start)
+  }
+
+  // Forward and back 5 seconds, then the End and Home keys.
+  await page.getByRole("button", { name: "Forward 5 seconds" }).click()
+  await expect.poll(() => markerMs(page)).toBe(w.start + 5000)
+  await page.getByRole("button", { name: "Back 5 seconds" }).click()
+  await expect.poll(() => markerMs(page)).toBe(w.start)
+  await page.keyboard.press("End")
+  await expect.poll(() => msOf(page, "time-now")).toBeGreaterThan(duration - 100)
+  await page.keyboard.press("Home")
+  await expect.poll(() => msOf(page, "time-now")).toBe(0)
+
+  // Clicking at the very left edge of the timeline also reaches the start.
+  await words(page).nth(8).click()
+  await page.mouse.click(ruler.x + 1, ruler.y + ruler.height / 2)
+  await expect.poll(() => markerMs(page)).toBe(0)
 })
 
 test("4. deleting words cuts them from the video and playback skips them", async ({ page }) => {
@@ -163,8 +223,10 @@ test("4. deleting words cuts them from the video and playback skips them", async
         tick()
       })
   )
-  await page.getByRole("button", { name: "Pause", exact: true }).click()
+  await page.getByRole("button", { name: "Stop", exact: true }).click()
   expect(Math.max(...samples)).toBeGreaterThan(cut.endMs)
+  // Stopping returns to where playback started.
+  await expect.poll(() => msOf(page, "time-now")).toBe(list[a - 2]!.start)
   const inside = samples.filter((t) => t > cut.startMs + 80 && t < cut.endMs - 80)
   expect(inside).toEqual([])
 })

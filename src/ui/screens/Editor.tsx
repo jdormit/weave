@@ -15,6 +15,7 @@ import { TranscriptPanel } from "../components/TranscriptPanel.tsx"
 import { EditorContext, playheadAtom, selectedClipAtom, selectionAtom, zoomAtom, type EditorContextValue } from "../editorState.ts"
 import { Icon } from "../Icon.tsx"
 import { onLinkClick } from "../router.ts"
+import { jumpToEnd, jumpToStart, moveBy, togglePlay } from "../transport.ts"
 import {
   applyEdit,
   editsAtom,
@@ -138,8 +139,7 @@ export const Editor = ({ id }: { id: string }) => {
     if (mod) return
     if (key === " ") {
       e.preventDefault()
-      const p = c.player.current
-      if (p) p.playing() ? p.pause() : p.play()
+      togglePlay(c)
     } else if (key === "Delete" || key === "Backspace") {
       e.preventDefault()
       deleteSelection(c)
@@ -156,8 +156,14 @@ export const Editor = ({ id }: { id: string }) => {
       registry.set(selectionAtom(id), null)
       registry.set(selectedClipAtom(id), null)
     } else if (key === "ArrowLeft" || key === "ArrowRight") {
-      const p = c.player.current
-      if (p) p.seek(Math.max(0, p.currentMs() + (key === "ArrowLeft" ? -5000 : 5000)))
+      e.preventDefault()
+      moveBy(c, key === "ArrowLeft" ? -5000 : 5000)
+    } else if (key === "Home") {
+      e.preventDefault()
+      jumpToStart(c)
+    } else if (key === "End") {
+      e.preventDefault()
+      jumpToEnd(c)
     }
   }, [id])
   useEffect(() => {
@@ -327,14 +333,15 @@ export const restoreSelection = (c: EditorContextValue) => {
 export const editedLength = (c: EditorContextValue) => editedDuration(c.cuts, c.recording.durationMs)
 
 const SHORTCUTS: ReadonlyArray<[string, ReadonlyArray<string>]> = [
-  ["Play or pause", ["Space"]],
+  ["Play from the start marker, or stop and go back to it", ["Space"]],
+  ["Move the start marker to the beginning or end", ["Home", "End"]],
   ["Cut or restore selected words", ["Delete"]],
   ["Delete the selected clip", ["Delete"]],
   ["Split at the playhead", ["S"]],
   ["Undo", ["Ctrl", "Z"]],
   ["Redo", ["Ctrl", "Shift", "Z"]],
   ["Zoom the timeline in or out", ["+", "−"]],
-  ["Jump back or ahead 5 seconds", ["←", "→"]],
+  ["Move the start marker back or ahead 5 seconds", ["←", "→"]],
   ["Select a range of words", ["Drag or Shift-click"]],
   ["Clear the selection", ["Esc"]],
   ["Show this list", ["?"]]

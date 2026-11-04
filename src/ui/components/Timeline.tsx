@@ -5,6 +5,7 @@ import { normalizeCuts } from "../../domain/editList.ts"
 import { formatClock } from "../../domain/transcriptFormat.ts"
 import { filmstrip, peaks, TRANSCRIBE_RATE } from "../../services/media.ts"
 import { playheadAtom, selectedClipAtom, selectionAtom, useEditor, zoomAtom } from "../editorState.ts"
+import { markerAtom, moveTo } from "../transport.ts"
 import { Icon } from "../Icon.tsx"
 import { deleteSelection, splitAtPlayhead } from "../screens/Editor.tsx"
 import { applyEdit, registry } from "../state.ts"
@@ -80,14 +81,34 @@ export const Timeline = () => {
     if (playheadX < el.scrollLeft || playheadX > el.scrollLeft + el.clientWidth - 40) el.scrollLeft = Math.max(0, playheadX - 80)
   }, [playheadX, zoom])
 
+  /** Moves the start marker (and the playhead) to a point on the timeline. */
   const seekToX = (clientX: number) => {
     const el = scrollRef.current
     if (!el) return
     const x = clientX - el.getBoundingClientRect().left + el.scrollLeft
-    const editedMs = Math.max(0, Math.min(edited, x / pxPerMs))
-    c.player.current?.seek(editedToSource(cuts, editedMs))
-    if (!c.player.current) registry.set(playheadAtom(c.id), editedToSource(cuts, editedMs))
+    // Snap to the very start, which is otherwise hard to hit at the edge.
+    const editedMs = x < 6 ? 0 : Math.max(0, Math.min(edited, x / pxPerMs))
+    moveTo(c, editedToSource(cuts, editedMs))
   }
+
+  /** Press and drag to scrub: the marker follows the pointer until it's released. */
+  const startScrub = (e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    seekToX(e.clientX)
+    const move = (ev: PointerEvent) => seekToX(ev.clientX)
+    const up = () => {
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", up)
+      window.removeEventListener("pointercancel", up)
+    }
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", up)
+    window.addEventListener("pointercancel", up)
+  }
+  const marker = useAtomValue(markerAtom(c.id))
+  const markerX = sourceToEdited(cuts, marker) * pxPerMs
 
   // Ruler ticks every "nice" interval.
   const ticks = useMemo(() => {
@@ -131,15 +152,16 @@ export const Timeline = () => {
       </div>
       <div className="tlscroll" ref={scrollRef}>
         <div className="tlinner" style={{ width: innerWidth }}>
-          <div className="ruler tnum" onMouseDown={(e) => seekToX(e.clientX)}>
+          <div className="ruler tnum" onPointerDown={startScrub} data-testid="ruler">
+            <div className="marker" style={{ left: markerX }} data-testid="marker" data-ms={Math.round(marker)} title="Start marker" />
             {ticks.map((t) => <span key={t} style={{ left: t * pxPerMs }}>{formatClock(t)}</span>)}
           </div>
           <div
             className="track"
-            onMouseDown={(e) => {
+            onPointerDown={(e) => {
               if (e.target === e.currentTarget) {
                 registry.set(selectedClipAtom(c.id), null)
-                seekToX(e.clientX)
+                startScrub(e)
               }
             }}
           >
@@ -169,7 +191,9 @@ export const Timeline = () => {
               />
             ))}
           </div>
-          <div className="playhead" style={{ left: playheadX }} data-testid="playhead" />
+          <div className="playhead" style={{ left: playheadX }} data-testid="playhead">
+            <span className="grab" onPointerDown={startScrub} aria-hidden="true" />
+          </div>
         </div>
       </div>
     </section>
