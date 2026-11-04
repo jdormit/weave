@@ -1,0 +1,13 @@
+// Weave is a static site. Cloudflare Workers serves the built files from dist/
+// with no Worker code. Headers (cross-origin isolation for multithreaded
+// Whisper) come from dist/_headers, which the build writes.
+// Deploy with `bun run deploy` after `wrangler login`.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "weave",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
