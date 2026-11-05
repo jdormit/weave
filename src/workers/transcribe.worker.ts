@@ -20,6 +20,10 @@ const useOrtBuild = (device: "webgpu" | "wasm") => {
 }
 env.allowLocalModels = false
 env.useBrowserCache = true
+// Hugging Face's CDN answers any request whose Referer is a *.workers.dev
+// address with a 404 and no CORS headers, which the browser reports as a CORS
+// error. Model downloads don't need a Referer, so never send one.
+env.fetch = (input, init) => fetch(input, { ...init, referrerPolicy: "no-referrer" })
 
 let loaded: { key: string; asr: AutomaticSpeechRecognitionPipeline } | null = null
 
