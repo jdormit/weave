@@ -32,10 +32,16 @@ export const modelRepo = (model: ModelSize) => `onnx-community/whisper-${model}_
 /**
  * fp16 on WebGPU, 8-bit on WASM. Large v3 Turbo uses 4-bit weights with fp16
  * math, and only runs on WebGPU.
+ *
+ * `model` repeats the encoder's dtype. Transformers.js loads the encoder by its
+ * file name (`encoder_model`), but when it adds up the download total it looks
+ * the dtype up by session name (`model`). Without that key the total counts the
+ * full-precision encoder, which is 2.5 GB for Large v3 Turbo, even though that
+ * file is never downloaded.
  */
 export const modelDtype = (model: ModelSize, device: Device) => {
   const d = model === "large-v3-turbo" ? "q4f16" : device === "webgpu" ? "fp16" : "q8"
-  return { encoder_model: d, decoder_model_merged: d } as const
+  return { model: d, encoder_model: d, decoder_model_merged: d } as const
 }
 
 export interface ModelInfo {
