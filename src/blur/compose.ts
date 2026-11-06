@@ -3,7 +3,7 @@
  * the segmenter. Uses only 2D canvas calls, so it runs on the page and in
  * workers.
  */
-import { blurRadius, MASK_HEIGHT, MASK_WIDTH } from "./mask.ts"
+import { blurRadius, MASK_HEIGHT, MASK_WIDTH, type BlurStrength } from "./mask.ts"
 
 type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 /** Anything that can draw itself into a 2D context, like a mediabunny VideoSample. */
@@ -29,7 +29,14 @@ export interface Compositor {
    * Draws the frame into out (width x height) with the background blurred.
    * Without a mask yet, draws the whole frame blurred, so the background never shows sharp.
    */
-  draw(src: FrameSource, mask: Uint8ClampedArray<ArrayBuffer> | null, out: Ctx2D, width: number, height: number): void
+  draw(
+    src: FrameSource,
+    mask: Uint8ClampedArray<ArrayBuffer> | null,
+    out: Ctx2D,
+    width: number,
+    height: number,
+    strength?: BlurStrength
+  ): void
 }
 
 export const createCompositor = (): Compositor => {
@@ -49,17 +56,19 @@ export const createCompositor = (): Compositor => {
       drawFrame(smallCtx, src, 0, 0, MASK_WIDTH, MASK_HEIGHT)
       return smallCtx.getImageData(0, 0, MASK_WIDTH, MASK_HEIGHT).data
     },
-    draw: (src, mask, out, width, height) => {
-      // The background: the frame at a quarter size, blurred, then scaled up. It
+    draw: (src, mask, out, width, height, strength = "strong") => {
+      // The background: the frame at reduced size, blurred, then scaled up. It
       // is drawn a little larger than the canvas so the blur has no dark edge.
-      const scale = hasFilter ? 4 : 24
+      // A light blur shrinks the frame less, since shrinking blurs too.
+      const light = strength === "light"
+      const scale = hasFilter ? (light ? 2 : 4) : (light ? 8 : 24)
       const bw = Math.max(1, Math.round(width / scale))
       const bh = Math.max(1, Math.round(height / scale))
       if (bg.width !== bw || bg.height !== bh) {
         bg.width = bw
         bg.height = bh
       }
-      const r = hasFilter ? Math.max(1, Math.round(blurRadius(width) / scale)) : 0
+      const r = hasFilter ? Math.max(1, Math.round(blurRadius(width, strength) / scale)) : 0
       bgCtx.filter = r > 0 ? `blur(${r}px)` : "none"
       drawFrame(bgCtx, src, -2 * r, -2 * r, bw + 4 * r, bh + 4 * r)
       out.imageSmoothingEnabled = true

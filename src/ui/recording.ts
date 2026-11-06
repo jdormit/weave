@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import * as Atom from "effect/reactivity/Atom"
-import { defaultOverlay, type Recording, type Settings as SettingsType } from "../domain/schema.ts"
+import { defaultOverlay, type BlurStrength, type Recording, type Settings as SettingsType } from "../domain/schema.ts"
 import { Capture, type CaptureSession } from "../services/Capture.ts"
 import { Recorder, type RecorderHandle } from "../services/Recorder.ts"
 import { RecordingStore } from "../services/RecordingStore.ts"
@@ -29,7 +29,7 @@ export interface SessionState {
   readonly surfaceType: string
   readonly cameraStream: MediaStream | null
   /** Show the camera with its background blurred. */
-  readonly blur: boolean
+  readonly blur: BlurStrength | null
   readonly pip: boolean
 }
 
@@ -40,7 +40,7 @@ const initial: SessionState = {
   surfaceLabel: "",
   surfaceType: "browser",
   cameraStream: null,
-  blur: false,
+  blur: null,
   pip: false
 }
 
@@ -179,7 +179,7 @@ export const startSession = async (prefs: SettingsType) => {
     cameraSegments: [],
     cameraAudio: false,
     screenAudioMuted: false,
-    overlay: { ...defaultOverlay, blur: session.camera !== null && prefs.blurBackground },
+    overlay: { ...defaultOverlay, blur: session.camera !== null && prefs.blurBackground, blurStrength: prefs.blurStrength },
     transcriptStatus: "none"
   }
   try {
@@ -210,7 +210,7 @@ export const startSession = async (prefs: SettingsType) => {
     surfaceLabel: session.surfaceLabel,
     surfaceType: session.surfaceType,
     cameraStream: session.camera,
-    blur: recording.overlay.blur
+    blur: recording.overlay.blur ? recording.overlay.blurStrength : null
   })
   await openPip()
   await beginTake()

@@ -47,5 +47,8 @@ export const confidenceToMask = (
   return out
 }
 
-/** Blur radius, in pixels of a frame this wide, for a soft background. */
-export const blurRadius = (width: number) => Math.max(4, Math.round(width / 60))
+export type BlurStrength = "light" | "strong"
+
+/** Blur radius, in pixels of a frame this wide. Light keeps the background recognizable and the edge around the person softer. */
+export const blurRadius = (width: number, strength: BlurStrength = "strong") =>
+  strength === "light" ? Math.max(2, Math.round(width / 200)) : Math.max(4, Math.round(width / 60))

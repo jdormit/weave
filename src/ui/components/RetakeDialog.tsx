@@ -76,7 +76,7 @@ export const RetakeDialog = ({ onClose }: { onClose: () => void }) => {
           {cameraId === "none"
             ? <span className="muted">No camera</span>
             : (
-              <BlurredVideo videoRef={videoRef} blur={c.recording.overlay.blur}>
+              <BlurredVideo videoRef={videoRef} blur={c.recording.overlay.blur ? c.recording.overlay.blurStrength : null}>
                 <video ref={videoRef} autoPlay muted playsInline data-testid="retake-camera-preview" />
               </BlurredVideo>
             )}

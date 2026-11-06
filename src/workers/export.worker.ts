@@ -21,6 +21,7 @@ import {
 } from "mediabunny"
 import { createCompositor, type Compositor } from "../blur/compose.ts"
 import { createSegmenter, type Segmenter } from "../blur/segmenter.ts"
+import type { BlurStrength } from "../blur/mask.ts"
 import { cameraRanges, cameraTimeAt, screenRanges, type FileRange } from "../domain/camera.ts"
 import { outputPieces } from "../domain/editList.ts"
 import { TimeStretcher } from "../domain/stretch.ts"
@@ -118,7 +119,8 @@ const run = async (job: ExportJob) => {
           throw e
         })),
         compositor: createCompositor(),
-        canvas: new OffscreenCanvas(cameraTrack.displayWidth, cameraTrack.displayHeight)
+        canvas: new OffscreenCanvas(cameraTrack.displayWidth, cameraTrack.displayHeight),
+        strength: job.overlay.blurStrength
       }
       : null
 
@@ -338,7 +340,7 @@ type Drawable = {
 }
 
 const drawBlurred = async (
-  blur: { segmenter: Segmenter; compositor: Compositor; canvas: OffscreenCanvas },
+  blur: { segmenter: Segmenter; compositor: Compositor; canvas: OffscreenCanvas; strength: BlurStrength },
   cam: { displayWidth: number; displayHeight: number; draw: (c: OffscreenCanvasRenderingContext2D, dx: number, dy: number, dw: number, dh: number) => void }
 ) => {
   const { canvas } = blur
@@ -349,7 +351,7 @@ const drawBlurred = async (
   const camCtx = canvas.getContext("2d")
   if (!camCtx) throw new Error("Couldn't create a drawing surface.")
   const mask = await blur.segmenter.segment(blur.compositor.sample(cam))
-  blur.compositor.draw(cam, mask, camCtx, canvas.width, canvas.height)
+  blur.compositor.draw(cam, mask, camCtx, canvas.width, canvas.height, blur.strength)
 }
 
 /** Lets drawBubble crop a canvas the way it crops a video frame. */

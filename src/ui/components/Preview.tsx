@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react"
 import { Effect } from "effect"
 import { useEffect, useRef, useState, type CSSProperties } from "react"
 import { editedDuration, sourceToEdited } from "../../domain/editList.ts"
-import type { Overlay } from "../../domain/schema.ts"
+import type { BlurStrength, Overlay } from "../../domain/schema.ts"
 import { formatClock } from "../../domain/transcriptFormat.ts"
 import { Player } from "../../services/Player.ts"
 import { run } from "../../services/runtime.ts"
@@ -120,7 +120,7 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
           )}
           {cameraKind === "video" && (
             <Bubble overlay={c.recording.overlay} stage={box} aspect={aspect} hidden={!cameraActive}>
-              <BlurredVideo videoRef={cameraRef} blur={c.recording.overlay.blur}>
+              <BlurredVideo videoRef={cameraRef} blur={blurOf(c.recording.overlay)}>
                 <video
                   ref={cameraRef}
                   src={c.cameraUrl!}
@@ -135,7 +135,7 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
           {cameraKind === "audio" && <audio ref={voiceRef} src={c.cameraUrl!} preload="auto" data-testid="voiceover-audio" />}
           {take?.camera && (
             <Bubble overlay={{ ...c.recording.overlay, visible: true }} stage={box} aspect={aspect}>
-              <BlurredVideo videoRef={liveRef} blur={c.recording.overlay.blur}>
+              <BlurredVideo videoRef={liveRef} blur={blurOf(c.recording.overlay)}>
                 <video ref={liveRef} autoPlay muted playsInline data-testid="live-camera" />
               </BlurredVideo>
             </Bubble>
@@ -218,6 +218,15 @@ const TakeBar = ({ take, now, total }: { take: Take; now: number; total: number 
     </div>
   )
 }
+
+/** The blur to show for an overlay, or null for none. */
+const blurOf = (o: Overlay) => (o.blur ? o.blurStrength : null)
+
+const BLUR_CHOICES: ReadonlyArray<readonly [string, boolean, BlurStrength]> = [
+  ["No blur", false, "strong"],
+  ["Light blur", true, "light"],
+  ["Strong blur", true, "strong"]
+]
 
 const MIN_SIZE = 0.1
 const MAX_SIZE = 0.8
@@ -344,9 +353,17 @@ const Bubble = ({
             <button className={o.shape === "rounded" ? "on" : ""} aria-pressed={o.shape === "rounded"} onClick={() => save({ ...overlay, shape: "rounded" })}>
               <Icon name="rounded" />Rounded
             </button>
-            <button className={o.blur ? "on" : ""} aria-pressed={o.blur} onClick={() => save({ ...overlay, blur: !overlay.blur })}>
-              <Icon name="blur" />Blur background
-            </button>
+            <span className="sep" aria-hidden="true" />
+            <Icon name="blur" />
+            {BLUR_CHOICES.map(([label, blur, strength]) => {
+              const on = o.blur === blur && (!blur || o.blurStrength === strength)
+              return (
+                <button key={label} className={on ? "on" : ""} aria-pressed={on} onClick={() => save({ ...overlay, blur, blurStrength: blur ? strength : overlay.blurStrength })}>
+                  {label}
+                </button>
+              )
+            })}
+            <span className="sep" aria-hidden="true" />
             <button onClick={() => save({ ...overlay, visible: false })}>
               <Icon name="hide" />Hide
             </button>
