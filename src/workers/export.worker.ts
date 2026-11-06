@@ -2,6 +2,7 @@
 import {
   ALL_FORMATS,
   AudioSampleSink,
+  AudioSample,
   AudioSampleSource,
   BlobSource,
   BufferTarget,
@@ -13,12 +14,14 @@ import {
   VideoSampleSink,
   WebMOutputFormat,
   canEncodeAudio,
+  type InputAudioTrack,
   canEncodeVideo,
   type AudioCodec,
   type VideoCodec
 } from "mediabunny"
 import { createCompositor, type Compositor } from "../blur/compose.ts"
 import { createSegmenter, type Segmenter } from "../blur/segmenter.ts"
+import { cameraRanges, cameraTimeAt, screenRanges, type FileRange } from "../domain/camera.ts"
 import { keptSegments } from "../domain/editList.ts"
 import type { ExportJob, ExportRequest, ExportResponse } from "./exportProtocol.ts"
 import { outputSize, overlayRect } from "./exportProtocol.ts"
@@ -65,11 +68,16 @@ const run = async (job: ExportJob) => {
   try {
     const screenTrack = await screenInput.getPrimaryVideoTrack()
     if (!screenTrack) throw new Error("The screen recording has no video.")
-    const audioTrack = await screenInput.getPrimaryAudioTrack()
+    const screenAudio = job.screenAudioMuted ? null : await screenInput.getPrimaryAudioTrack()
+    const cameraAudio = job.cameraAudio && cameraInput ? await cameraInput.getPrimaryAudioTrack() : null
     const cameraTrack = job.overlay.visible && cameraInput ? await cameraInput.getPrimaryVideoTrack() : null
+    // The sound tracks to mix, each with the parts of its file that are kept.
+    const audioInputs: Array<{ track: InputAudioTrack; ranges: ReadonlyArray<FileRange> }> = []
+    if (screenAudio) audioInputs.push({ track: screenAudio, ranges: screenRanges(job.cuts, job.durationMs) })
+    if (cameraAudio) audioInputs.push({ track: cameraAudio, ranges: cameraRanges(job.cuts, job.durationMs, job) })
 
     const { width, height } = outputSize(screenTrack.displayWidth, screenTrack.displayHeight, job.resolution)
-    const plan = await choosePlan(width, height, audioTrack !== null)
+    const plan = await choosePlan(width, height, audioInputs.length > 0)
 
     const canvas = new OffscreenCanvas(width, height)
     const ctx = canvas.getContext("2d", { alpha: false })
@@ -82,7 +90,7 @@ const run = async (job: ExportJob) => {
     currentOutput = output
     const videoSource = new CanvasSource(canvas, { codec: plan.video, bitrate: QUALITY_HIGH, keyFrameInterval: 2 })
     output.addVideoTrack(videoSource, { frameRate: FPS })
-    const audioSource = plan.audio && audioTrack ? new AudioSampleSource({ codec: plan.audio, bitrate: 128_000 }) : null
+    const audioSource = plan.audio && audioInputs.length > 0 ? new AudioSampleSource({ codec: plan.audio, bitrate: 128_000 }) : null
     if (audioSource) output.addAudioTrack(audioSource)
     await output.start()
 
@@ -118,13 +126,20 @@ const run = async (job: ExportJob) => {
       const screenSink = new VideoSampleSink(screenTrack)
       const screenFrames = screenSink.samplesAtTimestamps(frameTimes)
       const cameraSink = cameraTrack ? new VideoSampleSink(cameraTrack) : null
-      const offsetSec = job.cameraOffsetMs / 1000
-      const cameraFrames = cameraSink?.samplesAtTimestamps(frameTimes.map((t) => Math.max(0, t - offsetSec))) ?? null
+      // Camera time for each frame; null where the camera has nothing. Gaps reuse
+      // the last time so the decoder never seeks backwards for nothing.
+      const cameraTimes = frameTimes.map((t) => cameraTimeAt(job, t * 1000))
+      let lastCam = 0
+      const cameraFrames = cameraSink?.samplesAtTimestamps(cameraTimes.map((ms) => (lastCam = ms ?? lastCam) / 1000)) ?? null
       let lastProgress = 0
       for (let i = 0; i < frameTimes.length; i++) {
         checkCanceled()
         const screen = (await screenFrames.next()).value ?? null
-        const cam = cameraFrames ? (await cameraFrames.next()).value ?? null : null
+        let cam = cameraFrames ? (await cameraFrames.next()).value ?? null : null
+        if (cam && cameraTimes[i] === null) {
+          cam.close()
+          cam = null
+        }
         ctx.fillStyle = "#000"
         ctx.fillRect(0, 0, width, height)
         if (screen) {
@@ -153,29 +168,10 @@ const run = async (job: ExportJob) => {
     }
 
     const audioLoop = async () => {
-      if (!audioSource || !audioTrack) return
-      const sink = new AudioSampleSink(audioTrack)
-      let outStart = 0
-      for (const seg of segments) {
-        const a = seg.startMs / 1000
-        const b = seg.endMs / 1000
-        for await (const sample of sink.samples(a, b)) {
-          checkCanceled()
-          const rate = sample.sampleRate
-          const from = Math.max(0, Math.round((a - sample.timestamp) * rate))
-          const to = Math.min(sample.numberOfFrames, Math.round((b - sample.timestamp) * rate))
-          if (to <= from) {
-            sample.close()
-            continue
-          }
-          const part = from > 0 || to < sample.numberOfFrames ? sample.trim(from, to) : sample.clone()
-          part.setTimestamp(outStart + Math.max(0, sample.timestamp + from / rate - a))
-          sample.close()
-          await audioSource.add(part)
-          part.close()
-        }
-        outStart += b - a
-      }
+      if (!audioSource) return
+      await mixAudio(audioInputs, totalMs, async (sample) => {
+        await audioSource.add(sample)
+      })
     }
 
     await Promise.all([videoLoop(), audioLoop()])
@@ -199,6 +195,110 @@ const run = async (job: ExportJob) => {
     screenInput.dispose()
     cameraInput?.dispose()
   }
+}
+
+const MIX_RATE = 48000
+const BLOCK = 4800
+
+interface Piece {
+  /** Where the piece starts in the edited output, in seconds. */
+  readonly outSec: number
+  readonly rate: number
+  /** One or two channels. */
+  readonly planes: ReadonlyArray<Float32Array>
+}
+
+/** The kept parts of one audio track, as pieces placed on the edited timeline. */
+async function* pieces(track: InputAudioTrack, ranges: ReadonlyArray<FileRange>): AsyncGenerator<Piece> {
+  const sink = new AudioSampleSink(track)
+  for (const r of ranges) {
+    const a = r.fromMs / 1000
+    const b = r.toMs / 1000
+    for await (const sample of sink.samples(a, b)) {
+      checkCanceled()
+      const rate = sample.sampleRate
+      const from = Math.max(0, Math.round((a - sample.timestamp) * rate))
+      const to = Math.min(sample.numberOfFrames, Math.round((b - sample.timestamp) * rate))
+      if (to > from) {
+        const planes: Array<Float32Array> = []
+        for (let c = 0; c < Math.min(2, sample.numberOfChannels); c++) {
+          const buf = new Float32Array(to - from)
+          sample.copyTo(buf, { planeIndex: c, format: "f32-planar", frameOffset: from, frameCount: to - from })
+          planes.push(buf)
+        }
+        yield { outSec: r.outMs / 1000 + Math.max(0, sample.timestamp + from / rate - a), rate, planes }
+      }
+      sample.close()
+    }
+  }
+}
+
+/**
+ * Mixes the kept parts of several audio tracks into one stereo 48 kHz stream
+ * as long as the edited video. Reads the tracks side by side, so only a few
+ * blocks are held in memory at a time.
+ */
+const mixAudio = async (
+  inputs: ReadonlyArray<{ track: InputAudioTrack; ranges: ReadonlyArray<FileRange> }>,
+  totalMs: number,
+  emit: (sample: AudioSample) => Promise<void>
+) => {
+  const totalFrames = Math.round((totalMs / 1000) * MIX_RATE)
+  const blocks = new Map<number, [Float32Array, Float32Array]>()
+  const block = (i: number) => {
+    let b = blocks.get(i)
+    if (!b) blocks.set(i, (b = [new Float32Array(BLOCK), new Float32Array(BLOCK)]))
+    return b
+  }
+  const add = (p: Piece) => {
+    const start = Math.round(p.outSec * MIX_RATE)
+    const len = p.planes[0]!.length
+    const outLen = Math.round((len * MIX_RATE) / p.rate)
+    const left = p.planes[0]!
+    const right = p.planes[1] ?? left
+    for (let k = 0; k < outLen; k++) {
+      const f = start + k
+      if (f >= totalFrames) break
+      const src = p.rate === MIX_RATE ? k : Math.min(len - 1, Math.floor((k * p.rate) / MIX_RATE))
+      const [l, r] = block(Math.floor(f / BLOCK))
+      const at = f % BLOCK
+      l[at]! += left[src]!
+      r[at]! += right[src]!
+    }
+  }
+  let flushed = 0
+  const flush = async (untilFrame: number) => {
+    while (flushed * BLOCK < totalFrames && (flushed + 1) * BLOCK <= untilFrame) {
+      const frames = Math.min(BLOCK, totalFrames - flushed * BLOCK)
+      const [l, r] = blocks.get(flushed) ?? [new Float32Array(BLOCK), new Float32Array(BLOCK)]
+      const data = new Float32Array(frames * 2)
+      for (let i = 0; i < frames; i++) {
+        data[i] = Math.max(-1, Math.min(1, l[i]!))
+        data[frames + i] = Math.max(-1, Math.min(1, r[i]!))
+      }
+      const sample = new AudioSample({ data, format: "f32-planar", numberOfChannels: 2, sampleRate: MIX_RATE, timestamp: (flushed * BLOCK) / MIX_RATE })
+      await emit(sample)
+      sample.close()
+      blocks.delete(flushed)
+      flushed++
+    }
+  }
+  const streams = inputs.map((i) => ({ it: pieces(i.track, i.ranges), pos: 0, done: false }))
+  while (streams.some((s) => !s.done)) {
+    checkCanceled()
+    // Read from whichever track is furthest behind.
+    const s = streams.filter((x) => !x.done).reduce((a, b) => (b.pos < a.pos ? b : a))
+    const next = await s.it.next()
+    if (next.done) s.done = true
+    else {
+      add(next.value)
+      s.pos = next.value.outSec + next.value.planes[0]!.length / next.value.rate
+    }
+    const open = streams.filter((x) => !x.done)
+    // Everything before the slowest open track (less a block, for rounding) is final.
+    if (open.length > 0) await flush(Math.floor(Math.min(...open.map((x) => x.pos)) * MIX_RATE) - BLOCK)
+  }
+  await flush(Infinity)
 }
 
 type Drawable = {

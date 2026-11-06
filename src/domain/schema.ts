@@ -40,6 +40,18 @@ export const ScreenInfo = Schema.Struct({
 })
 export type ScreenInfo = typeof ScreenInfo.Type
 
+/**
+ * A stretch of source time covered by a camera take that was recorded in the
+ * editor, while the video played back. cameraMs is the camera file's time at
+ * startMs; within the stretch both run at the same speed.
+ */
+export const CameraSegment = Schema.Struct({
+  startMs: Schema.Number,
+  endMs: Schema.Number,
+  cameraMs: Schema.Number
+})
+export type CameraSegment = typeof CameraSegment.Type
+
 export const Recording = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
@@ -51,6 +63,16 @@ export const Recording = Schema.Struct({
   hasAudio: Schema.Boolean,
   /** Camera recorder start time minus screen recorder start time. */
   cameraOffsetMs: Schema.Number,
+  /**
+   * Set when the camera was re-recorded in the editor. Source times outside
+   * every segment have no camera. Empty means the camera was recorded with the
+   * screen and lines up with it through cameraOffsetMs.
+   */
+  cameraSegments: Schema.Array(CameraSegment).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  /** The camera file has a voiceover (microphone) track. */
+  cameraAudio: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+  /** Leave the screen recording's own sound out of playback, transcription and export. */
+  screenAudioMuted: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
   overlay: Overlay,
   transcriptStatus: TranscriptStatus
 })

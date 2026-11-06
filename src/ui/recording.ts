@@ -176,6 +176,9 @@ export const startSession = async (prefs: SettingsType) => {
     hasCamera: session.camera !== null,
     hasAudio: session.hasAudio,
     cameraOffsetMs: 0,
+    cameraSegments: [],
+    cameraAudio: false,
+    screenAudioMuted: false,
     overlay: { ...defaultOverlay, blur: session.camera !== null && prefs.blurBackground },
     transcriptStatus: "none"
   }

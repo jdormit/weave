@@ -51,7 +51,7 @@ export const Record = () => {
   return <RecordingView />
 }
 
-const useDevices = () => {
+export const useDevices = () => {
   const [devices, setDevices] = useState<Devices>({ cameras: [], mics: [] })
   useEffect(() => {
     const load = () => void run(Effect.gen(function*() { return yield* (yield* Capture).devices })).then(setDevices)
@@ -62,7 +62,7 @@ const useDevices = () => {
   return [devices, () => void run(Effect.gen(function*() { return yield* (yield* Capture).devices })).then(setDevices)] as const
 }
 
-const useStream = (open: () => Promise<MediaStream> | null, deps: ReadonlyArray<unknown>, onOpen?: () => void) => {
+export const useStream = (open: () => Promise<MediaStream> | null, deps: ReadonlyArray<unknown>, onOpen?: () => void) => {
   const [stream, setStream] = useState<MediaStream | null>(null)
   useEffect(() => {
     let alive = true
