@@ -28,6 +28,8 @@ export interface SessionState {
   readonly surfaceLabel: string
   readonly surfaceType: string
   readonly cameraStream: MediaStream | null
+  /** Show the camera with its background blurred. */
+  readonly blur: boolean
   readonly pip: boolean
 }
 
@@ -38,6 +40,7 @@ const initial: SessionState = {
   surfaceLabel: "",
   surfaceType: "browser",
   cameraStream: null,
+  blur: false,
   pip: false
 }
 
@@ -173,7 +176,7 @@ export const startSession = async (prefs: SettingsType) => {
     hasCamera: session.camera !== null,
     hasAudio: session.hasAudio,
     cameraOffsetMs: 0,
-    overlay: defaultOverlay,
+    overlay: { ...defaultOverlay, blur: session.camera !== null && prefs.blurBackground },
     transcriptStatus: "none"
   }
   try {
@@ -203,7 +206,8 @@ export const startSession = async (prefs: SettingsType) => {
   set({
     surfaceLabel: session.surfaceLabel,
     surfaceType: session.surfaceType,
-    cameraStream: session.camera
+    cameraStream: session.camera,
+    blur: recording.overlay.blur
   })
   await openPip()
   await beginTake()

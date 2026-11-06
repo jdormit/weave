@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 
 /** Where the camera bubble sits on the frame, and how it looks. */
 export const OverlayShape = Schema.Literals(["circle", "rounded"])
@@ -12,7 +12,9 @@ export const Overlay = Schema.Struct({
   /** Bubble height, as a fraction of the frame height. */
   size: Schema.Number,
   shape: OverlayShape,
-  visible: Schema.Boolean
+  visible: Schema.Boolean,
+  /** Blur the camera's background. Recordings saved before this option existed decode as false. */
+  blur: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false)))
 })
 export type Overlay = typeof Overlay.Type
 
@@ -21,7 +23,8 @@ export const defaultOverlay: Overlay = {
   y: 0.66,
   size: 0.28,
   shape: "circle",
-  visible: true
+  visible: true,
+  blur: false
 }
 
 export const TranscriptStatus = Schema.Literals(["none", "running", "done", "error"])
@@ -103,7 +106,9 @@ export const Settings = Schema.Struct({
   cameraId: Schema.String,
   micId: Schema.String,
   includeSystemAudio: Schema.Boolean,
-  showCutWords: Schema.Boolean
+  showCutWords: Schema.Boolean,
+  /** Blur the camera's background in new recordings. */
+  blurBackground: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false)))
 })
 export type Settings = typeof Settings.Type
 
@@ -114,7 +119,8 @@ export const defaultSettings: Settings = {
   cameraId: "default",
   micId: "default",
   includeSystemAudio: true,
-  showCutWords: true
+  showCutWords: true,
+  blurBackground: false
 }
 
 /** The JSON transcript export, which can be re-imported later. */

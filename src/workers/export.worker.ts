@@ -17,6 +17,8 @@ import {
   type AudioCodec,
   type VideoCodec
 } from "mediabunny"
+import { createCompositor, type Compositor } from "../blur/compose.ts"
+import { createSegmenter, type Segmenter } from "../blur/segmenter.ts"
 import { keptSegments } from "../domain/editList.ts"
 import type { ExportJob, ExportRequest, ExportResponse } from "./exportProtocol.ts"
 import { outputSize, overlayRect } from "./exportProtocol.ts"
@@ -26,6 +28,7 @@ declare const self: DedicatedWorkerGlobalScope
 const FPS = 30
 let canceled = false
 let currentOutput: Output | null = null
+let segmenter: Promise<Segmenter> | null = null
 
 const post = (msg: ExportResponse, transfer: Array<Transferable> = []) => self.postMessage(msg, transfer)
 
@@ -99,6 +102,17 @@ const run = async (job: ExportJob) => {
     }
 
     const bubble = overlayRect(job.overlay, width, height)
+    // Background blur: each camera frame is segmented and drawn blurred into camCanvas first.
+    const blur = cameraTrack && job.overlay.blur
+      ? {
+        segmenter: await (segmenter ??= createSegmenter(self.location.origin).catch((e) => {
+          segmenter = null
+          throw e
+        })),
+        compositor: createCompositor(),
+        canvas: new OffscreenCanvas(cameraTrack.displayWidth, cameraTrack.displayHeight)
+      }
+      : null
 
     const videoLoop = async () => {
       const screenSink = new VideoSampleSink(screenTrack)
@@ -118,8 +132,14 @@ const run = async (job: ExportJob) => {
           screen.close()
         }
         if (cam) {
-          drawBubble(ctx, cam, bubble)
-          cam.close()
+          if (blur) {
+            await drawBlurred(blur, cam)
+            cam.close()
+            drawBubble(ctx, canvasFrame(blur.canvas), bubble)
+          } else {
+            drawBubble(ctx, cam, bubble)
+            cam.close()
+          }
         }
         await videoSource.add(i / FPS, 1 / FPS)
         const doneMs = ((i + 1) / FPS) * 1000
@@ -181,9 +201,37 @@ const run = async (job: ExportJob) => {
   }
 }
 
+type Drawable = {
+  displayWidth: number
+  displayHeight: number
+  draw: (c: OffscreenCanvasRenderingContext2D, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number) => void
+}
+
+const drawBlurred = async (
+  blur: { segmenter: Segmenter; compositor: Compositor; canvas: OffscreenCanvas },
+  cam: { displayWidth: number; displayHeight: number; draw: (c: OffscreenCanvasRenderingContext2D, dx: number, dy: number, dw: number, dh: number) => void }
+) => {
+  const { canvas } = blur
+  if (canvas.width !== cam.displayWidth || canvas.height !== cam.displayHeight) {
+    canvas.width = cam.displayWidth
+    canvas.height = cam.displayHeight
+  }
+  const camCtx = canvas.getContext("2d")
+  if (!camCtx) throw new Error("Couldn't create a drawing surface.")
+  const mask = await blur.segmenter.segment(blur.compositor.sample(cam))
+  blur.compositor.draw(cam, mask, camCtx, canvas.width, canvas.height)
+}
+
+/** Lets drawBubble crop a canvas the way it crops a video frame. */
+const canvasFrame = (canvas: OffscreenCanvas): Drawable => ({
+  displayWidth: canvas.width,
+  displayHeight: canvas.height,
+  draw: (c, sx, sy, sw, sh, dx, dy, dw, dh) => c.drawImage(canvas, sx, sy, sw, sh, dx, dy, dw, dh)
+})
+
 const drawBubble = (
   ctx: OffscreenCanvasRenderingContext2D,
-  cam: { displayWidth: number; displayHeight: number; draw: (c: OffscreenCanvasRenderingContext2D, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number) => void },
+  cam: Drawable,
   r: ReturnType<typeof overlayRect>
 ) => {
   // Crop the camera frame to the bubble's shape (cover fit).

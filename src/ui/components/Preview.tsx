@@ -10,6 +10,7 @@ import { overlayRect } from "../../workers/exportProtocol.ts"
 import { playheadAtom, playingAtom, useEditor } from "../editorState.ts"
 import { jumpToEnd, jumpToStart, markerAtom, moveBy, returnToMarker, togglePlay } from "../transport.ts"
 import { Icon } from "../Icon.tsx"
+import { BlurredVideo } from "./BlurredVideo.tsx"
 import { registry, updateRecording } from "../state.ts"
 
 export const Preview = ({ style }: { style?: CSSProperties }) => {
@@ -94,7 +95,9 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
           )}
           {c.cameraUrl && (
             <Bubble overlay={c.recording.overlay} stage={box} aspect={aspect}>
-              <video ref={cameraRef} src={c.cameraUrl} muted playsInline preload="auto" data-testid="camera-video" />
+              <BlurredVideo videoRef={cameraRef} blur={c.recording.overlay.blur}>
+                <video ref={cameraRef} src={c.cameraUrl} muted playsInline preload="auto" data-testid="camera-video" />
+              </BlurredVideo>
             </Bubble>
           )}
         </div>
@@ -261,6 +264,9 @@ const Bubble = ({
             </button>
             <button className={o.shape === "rounded" ? "on" : ""} aria-pressed={o.shape === "rounded"} onClick={() => save({ ...overlay, shape: "rounded" })}>
               <Icon name="rounded" />Rounded
+            </button>
+            <button className={o.blur ? "on" : ""} aria-pressed={o.blur} onClick={() => save({ ...overlay, blur: !overlay.blur })}>
+              <Icon name="blur" />Blur background
             </button>
             <button onClick={() => save({ ...overlay, visible: false })}>
               <Icon name="hide" />Hide

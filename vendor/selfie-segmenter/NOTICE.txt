@@ -1,0 +1,9 @@
+selfie_segmenter_landscape_fp16.onnx
+
+MediaPipe Selfie Segmentation (landscape), by Google.
+Licensed under the Apache License, Version 2.0:
+https://www.apache.org/licenses/LICENSE-2.0
+Model card: https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Selfie%20Segmentation.pdf
+
+ONNX conversion from https://huggingface.co/onnx-community/mediapipe_selfie_segmentation_landscape
+(file onnx/model_fp16.onnx, revision 2497d5bec26c626c7b3c4edc6e1fefc21b64f6c3).
