@@ -1,6 +1,7 @@
 /**
- * Builds the static app into dist/: the page from src/index.html, the two
- * workers, and the ONNX Runtime files the transcription worker loads.
+ * Builds the static app into dist/: the page from src/index.html, the
+ * workers, the ONNX Runtime files the transcription and blur code load, and
+ * the background blur model.
  */
 import { cp, mkdir, readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
@@ -26,7 +27,11 @@ export const build = async (options: { minify?: boolean; outdir?: string } = {})
   if (!page.success) throw new AggregateError(page.logs, "Page build failed")
 
   const workers = await Bun.build({
-    entrypoints: [join(root, "src/workers/transcribe.worker.ts"), join(root, "src/workers/export.worker.ts")],
+    entrypoints: [
+      join(root, "src/workers/transcribe.worker.ts"),
+      join(root, "src/workers/export.worker.ts"),
+      join(root, "src/workers/blur.worker.ts")
+    ],
     outdir: join(outdir, "workers"),
     naming: "[name].[ext]",
     minify,
@@ -50,6 +55,12 @@ export const build = async (options: { minify?: boolean; outdir?: string } = {})
   await mkdir(join(outdir, "ort"), { recursive: true })
   for (const name of ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm", "ort-wasm-simd-threaded.jspi.mjs", "ort-wasm-simd-threaded.jspi.wasm"]) {
     await cp(join(ortDir, name), join(outdir, "ort", name))
+  }
+
+  // The background blur model (MediaPipe selfie segmenter, Apache-2.0), served from Weave itself.
+  await mkdir(join(outdir, "models"), { recursive: true })
+  for (const name of await readdir(join(root, "vendor/selfie-segmenter"))) {
+    await cp(join(root, "vendor/selfie-segmenter", name), join(outdir, "models", name))
   }
 
   // Inter, served from Weave itself. Only the variable-weight upright files are used.

@@ -7,6 +7,7 @@ import { formatClock } from "../../domain/transcriptFormat.ts"
 import { Capture, type Devices } from "../../services/Capture.ts"
 import { run } from "../../services/runtime.ts"
 import { Nav } from "../App.tsx"
+import { BlurredVideo } from "../components/BlurredVideo.tsx"
 import { Icon, type IconName } from "../Icon.tsx"
 import {
   askCancel,
@@ -188,6 +189,21 @@ const Setup = ({ starting }: { starting: boolean }) => {
                   <Icon name="chevron" />
                 </div>
               </div>
+              {settings.cameraId !== "none" && (
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={settings.blurBackground}
+                    onChange={(e) => updateSettings((x) => ({ ...x, blurBackground: e.target.checked }))}
+                    data-testid="blur-background"
+                  />
+                  <span>
+                    <b style={{ fontWeight: 550 }}>Blur background</b>
+                    <br />
+                    <span className="muted" style={{ fontSize: 13 }}>Done on this device. You can turn it off after recording.</span>
+                  </span>
+                </label>
+              )}
               <div className="field">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <label htmlFor="mic">Microphone</label>
@@ -213,6 +229,7 @@ const Setup = ({ starting }: { starting: boolean }) => {
                     <input
                       type="checkbox"
                       checked={settings.includeSystemAudio}
+                      data-testid="system-audio"
                       onChange={(e) => updateSettings((x) => ({ ...x, includeSystemAudio: e.target.checked }))}
                     />
                     <span>
@@ -230,7 +247,11 @@ const Setup = ({ starting }: { starting: boolean }) => {
             <div className="campreview">
               {settings.cameraId === "none"
                 ? <span className="muted">No camera</span>
-                : <video ref={videoRef} autoPlay muted playsInline data-testid="camera-preview" />}
+                : (
+                  <BlurredVideo videoRef={videoRef} blur={settings.blurBackground}>
+                    <video ref={videoRef} autoPlay muted playsInline data-testid="camera-preview" />
+                  </BlurredVideo>
+                )}
               <span style={{ position: "absolute", left: 12, bottom: 10, fontSize: 12, color: "var(--muted)" }}>
                 You can move, resize, or hide it after recording.
               </span>
@@ -256,7 +277,11 @@ const CameraBubble = ({ size, dim }: { size: number; dim?: boolean }) => {
     if (ref.current) ref.current.srcObject = session.cameraStream
   }, [session.cameraStream])
   if (!session.cameraStream) return null
-  return <video ref={ref} className="pipcam" style={{ width: size, height: size, opacity: dim ? 0.45 : 1 }} autoPlay muted playsInline />
+  return (
+    <BlurredVideo videoRef={ref} blur={session.blur} className="pipcam" style={{ width: size, height: size, opacity: dim ? 0.45 : 1 }}>
+      <video ref={ref} className="pipcam" style={{ width: size, height: size }} autoPlay muted playsInline />
+    </BlurredVideo>
+  )
 }
 
 /** Countdown, timer, and buttons. Used in the floating window and in Weave's own tab. */
