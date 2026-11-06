@@ -31,7 +31,7 @@ export const defaultOverlay: Overlay = {
   shape: "circle",
   visible: true,
   blur: false,
-  blurStrength: "strong"
+  blurStrength: "light"
 }
 
 export const TranscriptStatus = Schema.Literals(["none", "running", "done", "error"])
@@ -158,7 +158,7 @@ export const Settings = Schema.Struct({
   showCutWords: Schema.Boolean,
   /** Blur the camera's background in new recordings. */
   blurBackground: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
-  blurStrength: BlurStrength.pipe(Schema.withDecodingDefaultKey(Effect.succeed("strong" as const)))
+  blurStrength: BlurStrength.pipe(Schema.withDecodingDefaultKey(Effect.succeed("light" as const)))
 })
 export type Settings = typeof Settings.Type
 
@@ -171,7 +171,7 @@ export const defaultSettings: Settings = {
   includeSystemAudio: true,
   showCutWords: true,
   blurBackground: false,
-  blurStrength: "strong"
+  blurStrength: "light"
 }
 
 /** The JSON transcript export, which can be re-imported later. */

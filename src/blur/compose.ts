@@ -56,7 +56,7 @@ export const createCompositor = (): Compositor => {
       drawFrame(smallCtx, src, 0, 0, MASK_WIDTH, MASK_HEIGHT)
       return smallCtx.getImageData(0, 0, MASK_WIDTH, MASK_HEIGHT).data
     },
-    draw: (src, mask, out, width, height, strength = "strong") => {
+    draw: (src, mask, out, width, height, strength = "light") => {
       // The background: the frame at reduced size, blurred, then scaled up. It
       // is drawn a little larger than the canvas so the blur has no dark edge.
       // A light blur shrinks the frame less, since shrinking blurs too.
