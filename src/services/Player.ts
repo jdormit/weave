@@ -1,7 +1,8 @@
 import { Context, Effect, Layer } from "effect"
-import { cameraTimeAt, type CameraTiming } from "../domain/camera.ts"
+import { cameraRateAt, cameraTimeAt, type CameraTiming } from "../domain/camera.ts"
 import { cutAt } from "../domain/editList.ts"
 import type { Cut } from "../domain/schema.ts"
+import { normalSpeed, rateAt, type SpeedMap } from "../domain/speed.ts"
 
 export interface PlayerController {
   play(): void
@@ -12,7 +13,10 @@ export interface PlayerController {
   /** Plays from one source time and stops at another. */
   playRange(fromMs: number, toMs: number): void
   setCuts(cuts: ReadonlyArray<Cut>): void
+  setSpeed(speed: SpeedMap): void
   readonly currentMs: () => number
+  /** The speed the video plays at, at the current time. */
+  readonly currentRate: () => number
   /** Called about 60 times a second with the source time while playing, and after each seek. */
   onTime(f: (sourceMs: number) => void): () => void
   onPlayingChange(f: (playing: boolean) => void): () => void
@@ -23,6 +27,7 @@ export interface PlayerController {
 
 export interface PlayerOptions {
   readonly cuts: ReadonlyArray<Cut>
+  readonly speed?: SpeedMap
   readonly timing: CameraTiming
   readonly durationMs: number
 }
@@ -32,8 +37,9 @@ const LOOKAHEAD_MS = 40
 const SYNC_TOLERANCE_MS = 120
 
 /**
- * Keeps the screen and camera videos in sync, and jumps over cuts during
- * playback so the preview matches the export.
+ * Keeps the screen and camera videos in sync, jumps over cuts during
+ * playback, and plays each part at its speed, so the preview matches the
+ * export. The browser keeps the pitch of sped-up sound.
  */
 export class Player extends Context.Service<Player, {
   attach(
@@ -53,6 +59,7 @@ const makeController = (
   options: PlayerOptions
 ): PlayerController => {
   let cuts = options.cuts
+  let speed = options.speed ?? normalSpeed
   let stopAt: number | null = null
   let destroyed = false
   const timeListeners = new Set<(ms: number) => void>()
@@ -61,6 +68,17 @@ const makeController = (
   let cameraActive = true
   const now = () => screen.currentTime * 1000
   const emit = () => timeListeners.forEach((f) => f(now()))
+
+  /** Sets each video's playback rate for the current time. */
+  const syncRate = () => {
+    const rate = rateAt(speed, now())
+    if (screen.playbackRate !== rate) screen.playbackRate = rate
+    if (!camera) return
+    // The camera was recorded while the video played at some speed; it plays at
+    // its natural pace when the video plays at that speed again.
+    const camRate = rate / cameraRateAt(options.timing, now())
+    if (camera.playbackRate !== camRate) camera.playbackRate = camRate
+  }
 
   const syncCamera = (force = false) => {
     if (!camera) return
@@ -89,7 +107,7 @@ const makeController = (
       screen.pause()
       return
     }
-    const cut = cutAt(cuts, t + LOOKAHEAD_MS) ?? cutAt(cuts, t)
+    const cut = cutAt(cuts, t + LOOKAHEAD_MS * screen.playbackRate) ?? cutAt(cuts, t)
     if (cut) {
       if (cut.endMs >= options.durationMs - 1) {
         screen.pause()
@@ -115,6 +133,7 @@ const makeController = (
     if (destroyed) return
     if (!screen.paused) {
       skipCuts()
+      syncRate()
       syncCamera()
       emit()
     }
@@ -133,6 +152,7 @@ const makeController = (
     emit()
   }
   const onSeeked = () => {
+    syncRate()
     syncCamera(true)
     emit()
   }
@@ -147,6 +167,7 @@ const makeController = (
       // Restart from the beginning when at the end.
       if (t >= options.durationMs - 50) screen.currentTime = 0
       skipCuts()
+      syncRate()
       void screen.play().catch(() => {})
     },
     pause: () => {
@@ -164,13 +185,19 @@ const makeController = (
     playRange: (from, to) => {
       screen.currentTime = from / 1000
       stopAt = to
+      syncRate()
       syncCamera(true)
       void screen.play().catch(() => {})
     },
     setCuts: (next) => {
       cuts = next
     },
+    setSpeed: (next) => {
+      speed = next
+      syncRate()
+    },
     currentMs: now,
+    currentRate: () => rateAt(speed, now()),
     onTime: (f) => {
       timeListeners.add(f)
       return () => timeListeners.delete(f)

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { setSpeed } from "./speed.ts"
 import {
   addCut,
   addSplit,
@@ -114,8 +115,8 @@ describe("segments and clips", () => {
 describe("history", () => {
   test("undo and redo", () => {
     let list = emptyEditList("r")
-    list = commit(list, { cuts: [{ startMs: 0, endMs: 10 }], splits: [] })
-    list = commit(list, { cuts: [{ startMs: 0, endMs: 20 }], splits: [5] })
+    list = commit(list, { cuts: [{ startMs: 0, endMs: 10 }], splits: [], speeds: [], speed: 1 })
+    list = commit(list, { cuts: [{ startMs: 0, endMs: 20 }], splits: [5], speeds: [], speed: 1 })
     expect(list.past.length).toBe(2)
     list = undo(list)
     expect(list.cuts).toEqual([{ startMs: 0, endMs: 10 }])
@@ -131,12 +132,12 @@ describe("history", () => {
   })
   test("a change that alters nothing adds no step", () => {
     const list = emptyEditList("r")
-    expect(commit(list, { cuts: [], splits: [] }).past.length).toBe(0)
+    expect(commit(list, { cuts: [], splits: [], speeds: [], speed: 1 }).past.length).toBe(0)
   })
   test("a new change clears redo", () => {
-    let list = commit(emptyEditList("r"), { cuts: [{ startMs: 0, endMs: 10 }], splits: [] })
+    let list = commit(emptyEditList("r"), { cuts: [{ startMs: 0, endMs: 10 }], splits: [], speeds: [], speed: 1 })
     list = undo(list)
-    list = commit(list, { cuts: [], splits: [3] })
+    list = commit(list, { cuts: [], splits: [3], speeds: [], speed: 1 })
     expect(list.future).toEqual([])
   })
 })
@@ -197,4 +198,46 @@ test("a zero-length word at the very end is cut by a cut that runs to the end", 
   const cuts = [{ startMs: 1000, endMs: 2000 }]
   expect(isWordCut(cuts, { id: "a", text: "end", startMs: 2000, endMs: 2000 })).toBe(true)
   expect(isWordCut(cuts, { id: "b", text: "after", startMs: 2000, endMs: 2300 })).toBe(false)
+})
+
+describe("speed", () => {
+  const speed = { ranges: [{ startMs: 1000, endMs: 3000, rate: 2 }], global: 1 }
+  test("a sped-up clip is shorter in the edited video", () => {
+    expect(editedDuration([], 4000, speed)).toBe(3000)
+    expect(editedDuration([{ startMs: 2000, endMs: 3000 }], 4000, speed)).toBe(2500)
+    // The global speed scales every clip.
+    expect(editedDuration([], 4000, { ...speed, global: 2 })).toBe(1500)
+  })
+  test("source and edited times map both ways through cuts and speeds", () => {
+    const cuts = [{ startMs: 3500, endMs: 3600 }]
+    expect(sourceToEdited(cuts, 500, speed)).toBe(500)
+    expect(sourceToEdited(cuts, 2000, speed)).toBe(1500)
+    expect(sourceToEdited(cuts, 3200, speed)).toBe(2200)
+    expect(sourceToEdited(cuts, 3550, speed)).toBe(2500)
+    expect(sourceToEdited(cuts, 3700, speed)).toBe(2600)
+    for (const t of [0, 500, 1000, 1999, 2500, 3200, 3700]) expect(editedToSource(cuts, sourceToEdited(cuts, t, speed), speed)).toBeCloseTo(t, 6)
+    // At the cut, the frame after it is shown.
+    expect(editedToSource(cuts, 2500, speed)).toBe(3600)
+  })
+  test("clips divide where the clip speed changes and carry their speed", () => {
+    const out = clips([], [], 4000, speed.ranges)
+    expect(out.map((c) => [c.startMs, c.endMs, c.rate])).toEqual([[0, 1000, 1], [1000, 3000, 2], [3000, 4000, 1]])
+  })
+  test("setSpeed replaces the speed of a range and merges equal neighbors", () => {
+    let r = setSpeed([], 1000, 2000, 2)
+    r = setSpeed(r, 2000, 3000, 2)
+    expect(r).toEqual([{ startMs: 1000, endMs: 3000, rate: 2 }])
+    r = setSpeed(r, 1500, 2500, 1)
+    expect(r).toEqual([{ startMs: 1000, endMs: 1500, rate: 2 }, { startMs: 2500, endMs: 3000, rate: 2 }])
+  })
+  test("speed changes are undoable", () => {
+    let list = emptyEditList("r")
+    list = commit(list, { cuts: [], splits: [], speeds: [{ startMs: 0, endMs: 10, rate: 2 }], speed: 1 })
+    list = commit(list, { ...list, speed: 1.5 })
+    list = undo(list)
+    expect(list.speed).toBe(1)
+    expect(list.speeds).toHaveLength(1)
+    list = undo(list)
+    expect(list.speeds).toEqual([])
+  })
 })

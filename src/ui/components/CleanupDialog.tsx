@@ -23,10 +23,10 @@ export const CleanupDialog = ({ onClose }: { onClose: () => void }) => {
   const plannedPauses = pausesOn ? pauses : []
   const plannedFillers = fillersOn ? fillers.map((f) => f.cut) : []
   const next = applyCleanup(c.cuts, [...plannedPauses, ...plannedFillers], duration)
-  const before = editedDuration(c.cuts, duration)
-  const after = editedDuration(next, duration)
-  const savedPauses = editedDuration(c.cuts, duration) - editedDuration(applyCleanup(c.cuts, pauses, duration), duration)
-  const savedFillers = editedDuration(c.cuts, duration) - editedDuration(applyCleanup(c.cuts, fillers.map((f) => f.cut), duration), duration)
+  const before = editedDuration(c.cuts, duration, c.speed)
+  const after = editedDuration(next, duration, c.speed)
+  const savedPauses = editedDuration(c.cuts, duration, c.speed) - editedDuration(applyCleanup(c.cuts, pauses, duration), duration, c.speed)
+  const savedFillers = editedDuration(c.cuts, duration, c.speed) - editedDuration(applyCleanup(c.cuts, fillers.map((f) => f.cut), duration), duration, c.speed)
   const count = plannedPauses.length + plannedFillers.length
 
   const apply = () => {

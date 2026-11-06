@@ -1,4 +1,5 @@
 import type { CameraSegment, Cut, Overlay } from "../domain/schema.ts"
+import type { SpeedMap } from "../domain/speed.ts"
 
 export type Resolution = "source" | "1080" | "720"
 
@@ -7,6 +8,8 @@ export interface ExportJob {
   readonly screen: Blob
   readonly camera: Blob | null
   readonly cuts: ReadonlyArray<Cut>
+  /** Clip and global playback speeds. */
+  readonly speed: SpeedMap
   readonly durationMs: number
   readonly overlay: Overlay
   readonly cameraOffsetMs: number

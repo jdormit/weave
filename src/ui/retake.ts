@@ -165,7 +165,7 @@ export const startTake = async (c: EditorContextValue, options: TakeOptions) => 
 
   const tick = () => {
     if (finished) return
-    if (player.playing()) tracker.observe(player.currentMs(), performance.now() - startedAt)
+    if (player.playing()) tracker.observe(player.currentMs(), performance.now() - startedAt, player.currentRate())
     raf = requestAnimationFrame(tick)
   }
   raf = requestAnimationFrame(tick)

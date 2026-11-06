@@ -1,7 +1,8 @@
 import * as Atom from "effect/reactivity/Atom"
 import { createContext, useContext } from "react"
 import type { Recording, Transcript, Word } from "../domain/schema.ts"
-import type { Cut } from "../domain/schema.ts"
+import type { Cut, SpeedRange } from "../domain/schema.ts"
+import type { SpeedMap } from "../domain/speed.ts"
 import type { PlayerController } from "../services/Player.ts"
 
 /** Source time of the playhead. */
@@ -26,6 +27,9 @@ export interface EditorContextValue {
   readonly words: ReadonlyArray<Word>
   readonly cuts: ReadonlyArray<Cut>
   readonly splits: ReadonlyArray<number>
+  /** Clip speeds and the global speed. */
+  readonly speed: SpeedMap
+  readonly speeds: ReadonlyArray<SpeedRange>
   readonly player: { current: PlayerController | null }
   readonly screenUrl: string | null
   readonly cameraUrl: string | null

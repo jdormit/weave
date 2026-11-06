@@ -12,7 +12,9 @@ import { cancelTake, stopTake } from "../retake.ts"
 import { jumpToEnd, jumpToStart, markerAtom, moveBy, returnToMarker, togglePlay } from "../transport.ts"
 import { Icon } from "../Icon.tsx"
 import { BlurredVideo } from "./BlurredVideo.tsx"
-import { registry, updateRecording } from "../state.ts"
+import { SpeedSelect } from "./SpeedSelect.tsx"
+import { GLOBAL_SPEEDS } from "../../domain/speed.ts"
+import { applyEdit, registry, updateRecording } from "../state.ts"
 
 export const Preview = ({ style }: { style?: CSSProperties }) => {
   const c = useEditor()
@@ -54,6 +56,7 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
         const camera = cameraKind === "video" ? cameraRef.current : cameraKind === "audio" ? voiceRef.current : null
         return yield* (yield* Player).attach(screen, camera, {
           cuts: c.cuts,
+          speed: c.speed,
           timing: c.recording,
           durationMs: c.recording.durationMs
         })
@@ -89,13 +92,16 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
     if (liveRef.current) liveRef.current.srcObject = take?.camera ?? null
   }, [take?.camera])
 
-  // Keep the player's cut list current.
+  // Keep the player's cuts and speeds current.
   useEffect(() => {
     c.player.current?.setCuts(c.cuts)
   }, [c.cuts, c.player.current])
+  useEffect(() => {
+    c.player.current?.setSpeed(c.speed)
+  }, [c.speed, c.player.current])
 
-  const total = editedDuration(c.cuts, c.recording.durationMs)
-  const now = Math.min(total, sourceToEdited(c.cuts, playhead))
+  const total = editedDuration(c.cuts, c.recording.durationMs, c.speed)
+  const now = Math.min(total, sourceToEdited(c.cuts, playhead, c.speed))
 
   return (
     <section aria-label="Preview" className="preview" style={style}>
@@ -166,6 +172,14 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
           <span data-testid="time-now" data-ms={Math.round(now)}>{formatClock(now)}</span>{" "}
           <span style={{ color: "var(--muted)", fontWeight: 400 }}>/ <span data-testid="time-total" data-ms={Math.round(total)}>{formatClock(total)}</span></span>
         </span>
+        <SpeedSelect
+          label="Speed"
+          value={c.speed.global}
+          options={GLOBAL_SPEEDS}
+          testId="global-speed"
+          title="Speed of the whole video. Each clip's own speed is multiplied by it."
+          onChange={(rate) => applyEdit(c.id, (s) => ({ ...s, speed: rate }))}
+        />
         {cameraKind === "video" && !c.recording.overlay.visible && (
           <button className="btn ghost" onClick={() => updateRecording(c.id, (r) => ({ ...r, overlay: { ...r.overlay, visible: true } }))}>
             <Icon name="camera" />Show camera

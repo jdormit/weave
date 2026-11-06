@@ -1,6 +1,6 @@
 import { Effect, Option } from "effect"
 import { StorageFailed } from "../domain/errors.ts"
-import { cameraAudioOnSource } from "../domain/camera.ts"
+import { cameraAudioOnSource, cameraToSource } from "../domain/camera.ts"
 import type { CameraSegment, Recording, Transcript, Word } from "../domain/schema.ts"
 import { RecordingStore } from "./RecordingStore.ts"
 import { Settings } from "./Settings.ts"
@@ -87,40 +87,92 @@ export const toWords = (raw: ReadonlyArray<RawWord>, durationMs = Infinity): Arr
     endMs: Math.min(w.endMs, durationMs)
   }))
 
-/** Decoded 16 kHz audio per recording, kept for silence detection and the waveform. */
-const audioCache = new Map<string, { key: string; audio: Promise<Float32Array | null> }>()
+interface DecodedSound {
+  readonly rec: Recording
+  /** The screen's sound on the source timeline, unless muted. */
+  readonly screen: Float32Array | null
+  /** The voiceover recorded in the editor, in the camera file's own time. */
+  readonly camera: Float32Array | null
+  /** The recording's sound mixed on the source timeline. */
+  readonly mixed: Float32Array | null
+}
+
+/** Decoded 16 kHz audio per recording, kept for transcription, silence detection and the waveform. */
+const audioCache = new Map<string, { key: string; sound: Promise<DecodedSound> }>()
+
+const recordingSound = Effect.fn("recordingSound")(function*(id: string) {
+  const store = yield* RecordingStore
+  const rec = yield* store.get(id)
+  const key = JSON.stringify([rec.hasAudio, rec.screenAudioMuted, rec.cameraAudio, rec.cameraOffsetMs, rec.cameraSegments])
+  const cached = audioCache.get(id)
+  if (cached && cached.key === key) return yield* Effect.promise(() => cached.sound)
+  const screenFile = rec.hasAudio && !rec.screenAudioMuted ? Option.getOrNull(yield* store.readFile(id, "screen.webm")) : null
+  const cameraFile = rec.cameraAudio ? Option.getOrNull(yield* store.readFile(id, "camera.webm")) : null
+  const p = (async (): Promise<DecodedSound> => {
+    const screen = screenFile ? await decodeAudio16k(screenFile).catch(() => null) : null
+    const camera = cameraFile ? await decodeAudio16k(cameraFile).catch(() => null) : null
+    const parts: Array<Float32Array> = []
+    if (screen) parts.push(screen)
+    if (camera) parts.push(cameraAudioOnSource(camera, rec, rec.durationMs, TRANSCRIBE_RATE))
+    let mixed: Float32Array | null = null
+    if (parts.length === 1) mixed = parts[0]!
+    else if (parts.length > 1) {
+      mixed = new Float32Array(Math.max(...parts.map((x) => x.length)))
+      for (const part of parts) for (let i = 0; i < part.length; i++) mixed[i]! += part[i]!
+    }
+    return { rec, screen, camera, mixed }
+  })()
+  audioCache.set(id, { key, sound: p })
+  return yield* Effect.promise(() => p)
+})
 
 /**
  * The recording's sound as 16 kHz mono on the source timeline: the screen's
  * sound (unless muted) mixed with a voiceover recorded in the editor.
  */
 export const recordingAudio = Effect.fn("recordingAudio")(function*(id: string) {
-  const store = yield* RecordingStore
-  const rec = yield* store.get(id)
-  const key = JSON.stringify([rec.hasAudio, rec.screenAudioMuted, rec.cameraAudio, rec.cameraOffsetMs, rec.cameraSegments])
-  const cached = audioCache.get(id)
-  if (cached && cached.key === key) return yield* Effect.promise(() => cached.audio)
-  const screen = rec.hasAudio && !rec.screenAudioMuted ? Option.getOrNull(yield* store.readFile(id, "screen.webm")) : null
-  const camera = rec.cameraAudio ? Option.getOrNull(yield* store.readFile(id, "camera.webm")) : null
-  const p = (async () => {
-    const parts: Array<Float32Array> = []
-    if (screen) {
-      const a = await decodeAudio16k(screen).catch(() => null)
-      if (a) parts.push(a)
-    }
-    if (camera) {
-      const a = await decodeAudio16k(camera).catch(() => null)
-      if (a) parts.push(cameraAudioOnSource(a, rec, rec.durationMs, TRANSCRIBE_RATE))
-    }
-    if (parts.length === 0) return null
-    if (parts.length === 1) return parts[0]!
-    const out = new Float32Array(Math.max(...parts.map((x) => x.length)))
-    for (const part of parts) for (let i = 0; i < part.length; i++) out[i]! += part[i]!
-    return out
-  })()
-  audioCache.set(id, { key, audio: p })
-  return yield* Effect.promise(() => p)
+  return (yield* recordingSound(id)).mixed
 })
+
+/** Silence between the parts of the transcription input, so no word spans two parts. */
+const PART_GAP_SAMPLES = TRANSCRIBE_RATE
+
+/**
+ * What to transcribe, and how to turn its times into source times. A
+ * voiceover recorded over sped-up parts is transcribed at the pace it was
+ * spoken, not squeezed onto the source timeline, so the model hears natural
+ * speech. Then it goes after the screen's sound, and its word times are
+ * mapped back through the camera segments.
+ */
+export const transcriptionInput = (sound: DecodedSound): { audio: Float32Array | null; toSource: (ms: number) => number | null } => {
+  const { rec, screen, camera } = sound
+  const sped = rec.cameraSegments.some((s) => s.rate !== 1)
+  if (!camera || !sped) return { audio: sound.mixed, toSource: (ms) => ms }
+  const offset = screen ? screen.length + PART_GAP_SAMPLES : 0
+  const audio = new Float32Array(offset + camera.length)
+  if (screen) audio.set(screen)
+  audio.set(camera, offset)
+  const offsetMs = (offset / TRANSCRIBE_RATE) * 1000
+  const screenEndMs = screen ? (screen.length / TRANSCRIBE_RATE) * 1000 : 0
+  return {
+    audio,
+    toSource: (ms) => {
+      if (screen && ms < screenEndMs) return ms
+      if (ms < offsetMs) return null
+      return cameraToSource(rec, ms - offsetMs, rec.durationMs)
+    }
+  }
+}
+
+/** Maps raw word times to source times, dropping words that land outside the video. */
+const mapWords = (raw: ReadonlyArray<RawWord>, toSource: (ms: number) => number | null): Array<RawWord> =>
+  raw.flatMap((w) => {
+    const start = toSource(w.startMs)
+    if (start === null) return []
+    // A word can end exactly where its camera segment ends.
+    const end = toSource(w.endMs) ?? toSource(Math.max(w.startMs, w.endMs - 1)) ?? start
+    return [{ ...w, startMs: start, endMs: Math.max(start, end) }]
+  })
 
 export const forgetAudio = (id: string) => audioCache.delete(id)
 
@@ -141,7 +193,7 @@ export const transcribeRecording = Effect.fn("transcribeRecording")(function*(
   const settings = yield* (yield* Settings).get
   const transcriber = yield* Transcriber
   const recording = yield* store.update(id, (r) => ({ ...r, transcriptStatus: "running" }))
-  const audio = yield* recordingAudio(id)
+  const { audio, toSource } = transcriptionInput(yield* recordingSound(id))
   const words: Array<Word> = []
   const result = yield* Effect.gen(function*() {
     if (!audio || audio.length === 0) return { language: settings.language }
@@ -153,7 +205,9 @@ export const transcribeRecording = Effect.fn("transcribeRecording")(function*(
       onDownload: handlers.onDownload,
       onProgress: handlers.onProgress,
       onChunk: (raw) => {
-        words.push(...toWords(raw, recording.durationMs))
+        words.push(...toWords(mapWords(raw, toSource), recording.durationMs))
+        // A voiceover is transcribed after the screen's sound, so keep words in time order.
+        words.sort((a, b) => a.startMs - b.startMs)
         handlers.onPartial?.([...words])
       }
     })

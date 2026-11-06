@@ -1,4 +1,5 @@
 import type { Cut, EditList, EditState, Word } from "./schema.ts"
+import { clipRateAt, isNormal, splitBySpeed, type SpeedMap } from "./speed.ts"
 
 /**
  * Pure functions over the edit list. A cut is a source time range that the
@@ -14,6 +15,8 @@ export const emptyEditList = (recordingId: string): EditList => ({
   recordingId,
   cuts: [],
   splits: [],
+  speeds: [],
+  speed: 1,
   past: [],
   future: []
 })
@@ -69,31 +72,54 @@ export const cutAt = (cuts: ReadonlyArray<Cut>, t: number): Cut | undefined =>
 export const totalCutMs = (cuts: ReadonlyArray<Cut>): number =>
   cuts.reduce((sum, c) => sum + (c.endMs - c.startMs), 0)
 
-export const editedDuration = (cuts: ReadonlyArray<Cut>, durationMs: number): number =>
-  Math.max(0, durationMs - totalCutMs(normalizeCuts(cuts, durationMs)))
+/** The length of the edited video: what's left after cuts, at its playback speeds. */
+export const editedDuration = (cuts: ReadonlyArray<Cut>, durationMs: number, speed?: SpeedMap): number => {
+  if (isNormal(speed)) return Math.max(0, durationMs - totalCutMs(normalizeCuts(cuts, durationMs)))
+  return outputPieces(cuts, durationMs, speed).reduce((sum, p) => sum + p.outLenMs, 0)
+}
 
-/** Maps a source time to edited time. A time inside a cut maps to where the cut starts in edited time. */
-export const sourceToEdited = (cuts: ReadonlyArray<Cut>, sourceMs: number): number => {
-  let removed = 0
-  for (const c of cuts) {
-    if (sourceMs <= c.startMs) break
-    if (sourceMs < c.endMs) return c.startMs - removed
-    removed += c.endMs - c.startMs
+/**
+ * Maps a source time to edited time, after cuts and speeds. A time inside a
+ * cut maps to where the cut starts in edited time.
+ */
+export const sourceToEdited = (cuts: ReadonlyArray<Cut>, sourceMs: number, speed?: SpeedMap): number => {
+  if (isNormal(speed)) {
+    let removed = 0
+    for (const c of cuts) {
+      if (sourceMs <= c.startMs) break
+      if (sourceMs < c.endMs) return c.startMs - removed
+      removed += c.endMs - c.startMs
+    }
+    return sourceMs - removed
   }
-  return sourceMs - removed
+  let end = 0
+  for (const p of outputPieces(cuts, Infinity, speed)) {
+    if (sourceMs < p.startMs) return p.outMs
+    if (sourceMs < p.endMs) return p.outMs + (sourceMs - p.startMs) / p.rate
+    end = p.outMs + p.outLenMs
+  }
+  return end
 }
 
 /**
  * Maps an edited time back to a source time. At a cut boundary this returns the
  * time just after the cut, which is the frame the viewer actually sees.
  */
-export const editedToSource = (cuts: ReadonlyArray<Cut>, editedMs: number): number => {
-  let source = editedMs
-  for (const c of cuts) {
-    if (source < c.startMs) break
-    source += c.endMs - c.startMs
+export const editedToSource = (cuts: ReadonlyArray<Cut>, editedMs: number, speed?: SpeedMap): number => {
+  if (isNormal(speed)) {
+    let source = editedMs
+    for (const c of cuts) {
+      if (source < c.startMs) break
+      source += c.endMs - c.startMs
+    }
+    return source
   }
-  return source
+  let last = 0
+  for (const p of outputPieces(cuts, Infinity, speed)) {
+    if (editedMs < p.outMs + p.outLenMs) return p.startMs + Math.max(0, editedMs - p.outMs) * p.rate
+    last = p.endMs
+  }
+  return last
 }
 
 export interface Segment {
@@ -113,24 +139,60 @@ export const keptSegments = (cuts: ReadonlyArray<Cut>, durationMs: number): Arra
   return out
 }
 
+/** A kept part of the source at one speed, and where it lands in the edited video. */
+export interface OutputPiece extends Segment {
+  /** Source milliseconds played per edited millisecond. */
+  readonly rate: number
+  /** Where the piece starts in edited time. */
+  readonly outMs: number
+  /** Its length in edited time. */
+  readonly outLenMs: number
+}
+
+/** The kept parts of the source, divided where the speed changes, placed on the edited timeline. */
+export const outputPieces = (cuts: ReadonlyArray<Cut>, durationMs: number, speed?: SpeedMap): Array<OutputPiece> => {
+  const out: Array<OutputPiece> = []
+  let at = 0
+  for (const seg of keptSegments(cuts, durationMs)) {
+    for (const part of splitBySpeed(seg, speed)) {
+      const outLenMs = (part.endMs - part.startMs) / part.rate
+      out.push({ ...part, outMs: at, outLenMs })
+      at += outLenMs
+    }
+  }
+  return out
+}
+
 export interface Clip extends Segment {
   /** Stable index of the clip in source order, counting only kept clips. */
   readonly index: number
+  /** The clip's own speed, without the global speed. */
+  readonly rate: number
 }
 
-/** Kept segments further divided at the splits. These are the clips on the timeline. */
-export const clips = (cuts: ReadonlyArray<Cut>, splits: ReadonlyArray<number>, durationMs: number): Array<Clip> => {
-  const sortedSplits = [...splits].sort((a, b) => a - b)
+/**
+ * Kept segments further divided at the splits, and where the clip speed
+ * changes. These are the clips on the timeline.
+ */
+export const clips = (
+  cuts: ReadonlyArray<Cut>,
+  splits: ReadonlyArray<number>,
+  durationMs: number,
+  speeds: SpeedMap["ranges"] = []
+): Array<Clip> => {
+  const bounds = [...splits, ...speeds.flatMap((r) => [r.startMs, r.endMs])].sort((a, b) => a - b)
   const out: Array<Clip> = []
+  const push = (startMs: number, endMs: number) =>
+    out.push({ startMs, endMs, index: out.length, rate: clipRateAt(speeds, (startMs + endMs) / 2) })
   for (const seg of keptSegments(cuts, durationMs)) {
     let start = seg.startMs
-    for (const s of sortedSplits) {
+    for (const s of bounds) {
       if (s > start && s < seg.endMs) {
-        out.push({ startMs: start, endMs: s, index: out.length })
+        push(start, s)
         start = s
       }
     }
-    out.push({ startMs: start, endMs: seg.endMs, index: out.length })
+    push(start, seg.endMs)
   }
   return out
 }
@@ -141,7 +203,7 @@ export const addSplit = (splits: ReadonlyArray<number>, t: number): Array<number
 // ---------------------------------------------------------------------------
 // History
 
-const snapshot = (list: EditList): EditState => ({ cuts: list.cuts, splits: list.splits })
+const snapshot = (list: EditList): EditState => ({ cuts: list.cuts, splits: list.splits, speeds: list.speeds, speed: list.speed })
 
 /** Applies a change as one undoable step. A change that alters nothing adds no history. */
 export const commit = (list: EditList, next: EditState): EditList => {
@@ -149,8 +211,7 @@ export const commit = (list: EditList, next: EditState): EditList => {
   const past = [...list.past, snapshot(list)]
   return {
     ...list,
-    cuts: next.cuts,
-    splits: next.splits,
+    ...next,
     past: past.length > HISTORY_LIMIT ? past.slice(past.length - HISTORY_LIMIT) : past,
     future: []
   }
@@ -161,8 +222,7 @@ export const undo = (list: EditList): EditList => {
   if (!prev) return list
   return {
     ...list,
-    cuts: prev.cuts,
-    splits: prev.splits,
+    ...prev,
     past: list.past.slice(0, -1),
     future: [snapshot(list), ...list.future]
   }
@@ -173,8 +233,7 @@ export const redo = (list: EditList): EditList => {
   if (!next) return list
   return {
     ...list,
-    cuts: next.cuts,
-    splits: next.splits,
+    ...next,
     past: [...list.past, snapshot(list)],
     future: list.future.slice(1)
   }
@@ -184,7 +243,10 @@ const sameState = (a: EditState, b: EditState): boolean =>
   a.cuts.length === b.cuts.length &&
   a.splits.length === b.splits.length &&
   a.cuts.every((c, i) => c.startMs === b.cuts[i]!.startMs && c.endMs === b.cuts[i]!.endMs) &&
-  a.splits.every((s, i) => s === b.splits[i])
+  a.splits.every((s, i) => s === b.splits[i]) &&
+  a.speed === b.speed &&
+  a.speeds.length === b.speeds.length &&
+  a.speeds.every((r, i) => r.startMs === b.speeds[i]!.startMs && r.endMs === b.speeds[i]!.endMs && r.rate === b.speeds[i]!.rate)
 
 // ---------------------------------------------------------------------------
 // Words and cuts

@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { EncoderUnsupported, ExportCanceled, ExportFailed } from "../domain/errors.ts"
 import type { Cut, Recording, Transcript } from "../domain/schema.ts"
+import type { SpeedMap } from "../domain/speed.ts"
 import { toJson, toSrt, toTxt, toVtt } from "../domain/transcriptFormat.ts"
 import type { ExportResponse, Resolution } from "../workers/exportProtocol.ts"
 
@@ -18,6 +19,7 @@ export interface VideoExportOptions {
   readonly screen: Blob
   readonly camera: Blob | null
   readonly cuts: ReadonlyArray<Cut>
+  readonly speed: SpeedMap
   readonly resolution: Resolution
   readonly onProgress?: (doneMs: number, totalMs: number) => void
 }
@@ -25,7 +27,7 @@ export interface VideoExportOptions {
 /** Client for the export worker. Also builds transcript files. */
 export class Exporter extends Context.Service<Exporter, {
   exportVideo(options: VideoExportOptions): Effect.Effect<VideoExport, EncoderUnsupported | ExportFailed | ExportCanceled>
-  transcriptFile(format: TranscriptFormat, recording: Recording, transcript: Transcript, cuts: ReadonlyArray<Cut>): Blob
+  transcriptFile(format: TranscriptFormat, recording: Recording, transcript: Transcript, cuts: ReadonlyArray<Cut>, speed?: SpeedMap): Blob
 }>()("weave/Exporter") {
   static readonly layer = Layer.succeed(Exporter, Exporter.of({
     exportVideo: (o) =>
@@ -65,6 +67,7 @@ export class Exporter extends Context.Service<Exporter, {
           screen: o.screen,
           camera: o.camera,
           cuts: o.cuts,
+          speed: o.speed,
           durationMs: o.recording.durationMs,
           overlay: o.recording.overlay,
           cameraOffsetMs: o.recording.cameraOffsetMs,
@@ -77,14 +80,14 @@ export class Exporter extends Context.Service<Exporter, {
           if (!finished) worker.terminate()
         })
       }),
-    transcriptFile: (format, recording, transcript, cuts) => {
+    transcriptFile: (format, recording, transcript, cuts, speed) => {
       switch (format) {
         case "txt":
-          return new Blob([toTxt(transcript.words, cuts)], { type: "text/plain;charset=utf-8" })
+          return new Blob([toTxt(transcript.words, cuts, speed)], { type: "text/plain;charset=utf-8" })
         case "srt":
-          return new Blob([toSrt(transcript.words, cuts)], { type: "application/x-subrip;charset=utf-8" })
+          return new Blob([toSrt(transcript.words, cuts, speed)], { type: "application/x-subrip;charset=utf-8" })
         case "vtt":
-          return new Blob([toVtt(transcript.words, cuts)], { type: "text/vtt;charset=utf-8" })
+          return new Blob([toVtt(transcript.words, cuts, speed)], { type: "text/vtt;charset=utf-8" })
         case "json":
           return new Blob(
             [JSON.stringify(
@@ -94,7 +97,8 @@ export class Exporter extends Context.Service<Exporter, {
                 language: transcript.language,
                 durationMs: recording.durationMs,
                 words: transcript.words,
-                cuts
+                cuts,
+                speed
               }),
               null,
               2

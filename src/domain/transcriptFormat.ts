@@ -1,5 +1,6 @@
 import { isWordCut, sourceToEdited, editedDuration, normalizeCuts } from "./editList.ts"
 import type { Cut, TranscriptExport, Word } from "./schema.ts"
+import type { SpeedMap } from "./speed.ts"
 
 /** A pause longer than this starts a new paragraph. */
 export const PARAGRAPH_GAP_MS = 1500
@@ -33,13 +34,13 @@ export const keptWords = (words: ReadonlyArray<Word>, cuts: ReadonlyArray<Cut>):
   words.filter((w) => !isWordCut(cuts, w))
 
 /** Kept words in paragraphs, as plain text. */
-export const toTxt = (words: ReadonlyArray<Word>, cuts: ReadonlyArray<Cut>): string => {
+export const toTxt = (words: ReadonlyArray<Word>, cuts: ReadonlyArray<Cut>, speed?: SpeedMap): string => {
   const kept = keptWords(words, cuts)
   // Paragraph gaps are measured in edited time, so a cut pause joins paragraphs.
   const edited = kept.map((w) => ({
     ...w,
-    startMs: sourceToEdited(cuts, w.startMs),
-    endMs: sourceToEdited(cuts, w.endMs)
+    startMs: sourceToEdited(cuts, w.startMs, speed),
+    endMs: sourceToEdited(cuts, w.endMs, speed)
   }))
   return paragraphs(edited).map((p) => joinWords(p.words)).join("\n\n") + "\n"
 }
@@ -55,13 +56,14 @@ export const MAX_CUE_MS = 7000
 
 /**
  * Groups kept words into subtitle cues of at most 42 characters and 7 seconds,
- * with times in edited time. A cue also ends at a paragraph break.
+ * with times in edited time (after cuts and speeds). A cue also ends at a
+ * paragraph break.
  */
-export const toCues = (words: ReadonlyArray<Word>, cuts: ReadonlyArray<Cut>): Array<Cue> => {
+export const toCues = (words: ReadonlyArray<Word>, cuts: ReadonlyArray<Cut>, speed?: SpeedMap): Array<Cue> => {
   const kept = keptWords(words, cuts).map((w) => ({
     text: w.text.trim(),
-    startMs: sourceToEdited(cuts, w.startMs),
-    endMs: Math.max(sourceToEdited(cuts, w.startMs), sourceToEdited(cuts, w.endMs))
+    startMs: sourceToEdited(cuts, w.startMs, speed),
+    endMs: Math.max(sourceToEdited(cuts, w.startMs, speed), sourceToEdited(cuts, w.endMs, speed))
   })).filter((w) => w.text.length > 0)
   const cues: Array<Cue> = []
   let cur: { startMs: number; endMs: number; parts: Array<string> } | undefined
@@ -101,14 +103,14 @@ export const formatTimestamp = (ms: number, sep: "," | "."): string => {
   return `${pad(h)}:${pad(m)}:${pad(s)}${sep}${pad(t % 1000, 3)}`
 }
 
-export const toSrt = (words: ReadonlyArray<Word>, cuts: ReadonlyArray<Cut>): string =>
-  toCues(words, cuts)
+export const toSrt = (words: ReadonlyArray<Word>, cuts: ReadonlyArray<Cut>, speed?: SpeedMap): string =>
+  toCues(words, cuts, speed)
     .map((c, i) => `${i + 1}\n${formatTimestamp(c.startMs, ",")} --> ${formatTimestamp(c.endMs, ",")}\n${c.text}\n`)
     .join("\n")
 
-export const toVtt = (words: ReadonlyArray<Word>, cuts: ReadonlyArray<Cut>): string =>
+export const toVtt = (words: ReadonlyArray<Word>, cuts: ReadonlyArray<Cut>, speed?: SpeedMap): string =>
   "WEBVTT\n\n" +
-  toCues(words, cuts)
+  toCues(words, cuts, speed)
     .map((c) => `${formatTimestamp(c.startMs, ".")} --> ${formatTimestamp(c.endMs, ".")}\n${c.text}\n`)
     .join("\n")
 
@@ -119,6 +121,7 @@ export const toJson = (input: {
   readonly durationMs: number
   readonly words: ReadonlyArray<Word>
   readonly cuts: ReadonlyArray<Cut>
+  readonly speed?: SpeedMap
 }): TranscriptExport => {
   const cuts = normalizeCuts(input.cuts, input.durationMs)
   return {
@@ -127,9 +130,11 @@ export const toJson = (input: {
     modelId: input.modelId,
     language: input.language,
     durationMs: input.durationMs,
-    editedDurationMs: editedDuration(cuts, input.durationMs),
+    editedDurationMs: editedDuration(cuts, input.durationMs, input.speed),
     words: input.words.map((w) => ({ ...w, cut: isWordCut(cuts, w) })),
-    cuts
+    cuts,
+    speeds: input.speed?.ranges ?? [],
+    speed: input.speed?.global ?? 1
   }
 }
 

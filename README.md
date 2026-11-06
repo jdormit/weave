@@ -14,6 +14,7 @@ Everything stays in your browser. Recordings are saved on your device, and speec
 - **Place the camera.** Drag and resize the camera bubble, make it a circle or a rounded rectangle, or hide it.
 - **Blur your background.** Turn it on before recording to see it live, or on and off in the editor. The camera file is kept as recorded, so the blur is applied in the preview and at export.
 - **Re-record the camera and voice later.** In the editor, record a new camera and voiceover while the video plays back, skipping the parts you cut. A screen-only recording can get a camera and narration this way. You can keep or mute the original sound; the new sound is transcribed again, and your cuts stay.
+- **Change the speed** of any clip, or of the whole video. The whole-video speed multiplies each clip's speed, so a clip at 2× stays twice as fast as the rest. Sound keeps its pitch. You can record a screen with no narration, speed up the slow parts, and then record your camera and voice over the edited video: the take plays at the final speeds, so you talk at your normal pace. If you change a speed after that, the camera and voice speed up or slow down with the screen and stay in sync with it.
 - **Export** an MP4 with your edits and the camera bubble burned in, the original screen and camera files, and the transcript as SRT, VTT, TXT or JSON. Subtitles use the edited timing.
 
 Weave works best in Chrome, Edge and other Chromium browsers. Other browsers are missing parts of the screen recording and video encoding APIs it needs.
@@ -39,6 +40,7 @@ The end-to-end tests use Chromium's fake camera, screen and microphone. The micr
 - [Transformers.js](https://huggingface.co/docs/transformers.js) runs Whisper in a Web Worker. ONNX Runtime's files are served by Weave itself.
 - Background blur runs MediaPipe's selfie segmentation model with ONNX Runtime Web, in a Web Worker for the live previews and in the export worker. The model (250 KB) is in `vendor/selfie-segmenter/` and is served by Weave itself.
 - [Mediabunny](https://mediabunny.dev) reads recordings and encodes the export in a Web Worker, with the browser's WebCodecs.
+- Speeds are stored as source time ranges. The preview uses the browser's playback rate, which keeps pitch; the export changes the sound's speed with a small WSOLA time-stretcher in `src/domain/stretch.ts`.
 
 The source is in `src/`: `domain/` holds the pure logic (cuts, transcript formats, clean-up), `services/` the browser services, `workers/` the transcription, export and blur workers, `blur/` the background blur, and `ui/` the screens.
 

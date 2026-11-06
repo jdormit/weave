@@ -25,7 +25,7 @@ export const ExportDialog = ({ onClose }: { onClose: () => void }) => {
   const [error, setError] = useState<string | null>(null)
   const fiber = useRef<Fiber.Fiber<unknown, unknown> | null>(null)
   const title = safeFilename(c.recording.title)
-  const edited = editedDuration(c.cuts, c.recording.durationMs)
+  const edited = editedDuration(c.cuts, c.recording.durationMs, c.speed)
   const camera = c.cameraFile && c.recording.hasCamera && c.recording.overlay.visible
 
   useEffect(() => () => {
@@ -45,6 +45,7 @@ export const ExportDialog = ({ onClose }: { onClose: () => void }) => {
           screen,
           camera: c.cameraFile,
           cuts: c.cuts,
+          speed: c.speed,
           resolution,
           onProgress: (done, total) => setProgress((p) => ({ done, total, started: p?.started ?? performance.now() }))
         })
@@ -75,7 +76,7 @@ export const ExportDialog = ({ onClose }: { onClose: () => void }) => {
     if (!c.transcript) return
     void run(Effect.gen(function*() {
       const exporter = yield* Exporter
-      return exporter.transcriptFile(format, c.recording, c.transcript!, c.cuts)
+      return exporter.transcriptFile(format, c.recording, c.transcript!, c.cuts, c.speed)
     })).then((blob) => downloadBlob(blob, `${title}.${format}`))
   }
 
