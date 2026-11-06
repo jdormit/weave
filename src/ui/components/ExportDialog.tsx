@@ -46,6 +46,7 @@ export const ExportDialog = ({ onClose }: { onClose: () => void }) => {
           camera: c.cameraFile,
           cuts: c.cuts,
           speed: c.speed,
+          mutes: c.mutes,
           resolution,
           onProgress: (done, total) => setProgress((p) => ({ done, total, started: p?.started ?? performance.now() }))
         })
@@ -76,7 +77,7 @@ export const ExportDialog = ({ onClose }: { onClose: () => void }) => {
     if (!c.transcript) return
     void run(Effect.gen(function*() {
       const exporter = yield* Exporter
-      return exporter.transcriptFile(format, c.recording, c.transcript!, c.cuts, c.speed)
+      return exporter.transcriptFile(format, c.recording, c.transcript!, c.cuts, c.speed, c.mutes)
     })).then((blob) => downloadBlob(blob, `${title}.${format}`))
   }
 

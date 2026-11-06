@@ -20,6 +20,8 @@ export interface VideoExportOptions {
   readonly camera: Blob | null
   readonly cuts: ReadonlyArray<Cut>
   readonly speed: SpeedMap
+  /** Source ranges whose sound is left out. */
+  readonly mutes: ReadonlyArray<Cut>
   readonly resolution: Resolution
   readonly onProgress?: (doneMs: number, totalMs: number) => void
 }
@@ -27,7 +29,7 @@ export interface VideoExportOptions {
 /** Client for the export worker. Also builds transcript files. */
 export class Exporter extends Context.Service<Exporter, {
   exportVideo(options: VideoExportOptions): Effect.Effect<VideoExport, EncoderUnsupported | ExportFailed | ExportCanceled>
-  transcriptFile(format: TranscriptFormat, recording: Recording, transcript: Transcript, cuts: ReadonlyArray<Cut>, speed?: SpeedMap): Blob
+  transcriptFile(format: TranscriptFormat, recording: Recording, transcript: Transcript, cuts: ReadonlyArray<Cut>, speed?: SpeedMap, mutes?: ReadonlyArray<Cut>): Blob
 }>()("weave/Exporter") {
   static readonly layer = Layer.succeed(Exporter, Exporter.of({
     exportVideo: (o) =>
@@ -68,6 +70,7 @@ export class Exporter extends Context.Service<Exporter, {
           camera: o.camera,
           cuts: o.cuts,
           speed: o.speed,
+          mutes: o.mutes,
           durationMs: o.recording.durationMs,
           overlay: o.recording.overlay,
           cameraOffsetMs: o.recording.cameraOffsetMs,
@@ -80,7 +83,7 @@ export class Exporter extends Context.Service<Exporter, {
           if (!finished) worker.terminate()
         })
       }),
-    transcriptFile: (format, recording, transcript, cuts, speed) => {
+    transcriptFile: (format, recording, transcript, cuts, speed, mutes) => {
       switch (format) {
         case "txt":
           return new Blob([toTxt(transcript.words, cuts, speed)], { type: "text/plain;charset=utf-8" })
@@ -98,7 +101,8 @@ export class Exporter extends Context.Service<Exporter, {
                 durationMs: recording.durationMs,
                 words: transcript.words,
                 cuts,
-                speed
+                speed,
+                mutes
               }),
               null,
               2

@@ -839,6 +839,101 @@ test("12c. speeds up part of a silent recording, then adds a voice over the edit
   await page.keyboard.press("Escape")
 })
 
+test("12d. mutes a clip, silencing its voiceover in the preview and the export", async ({ page }) => {
+  // The recording from 12c: a voiceover over three clips, the middle one at 2x.
+  await openEditor(page)
+  const clips = page.getByTestId("clip")
+  await expect(clips).toHaveCount(3)
+  const clickClipAt = async (n: number, frac: number) => {
+    const b = (await clips.nth(n).boundingBox())!
+    await page.mouse.click(b.x + b.width * frac, b.y + b.height / 2)
+  }
+  const range = async (n: number) => ({
+    startMs: Number(await clips.nth(n).getAttribute("data-start")),
+    endMs: Number(await clips.nth(n).getAttribute("data-end"))
+  })
+  const [c0, c1, c2] = [await range(0), await range(1), await range(2)]
+  const total = await msOf(page, "time-total")
+  const exportTo = async (name: string) => {
+    await page.getByRole("button", { name: "Export", exact: true }).click()
+    const [d] = await Promise.all([
+      page.waitForEvent("download", { timeout: 200_000 }),
+      page.getByTestId("export").getByTestId("export-video").click()
+    ])
+    const file = join(downloadsDir, name)
+    await d.saveAs(file)
+    await page.keyboard.press("Escape")
+    return file
+  }
+
+  // Export once to compare against. The voice has a long pause in it, so mute
+  // whichever outer clip (both at 1x) has more speech in it.
+  const baseline = await exportTo("before-mute.mp4")
+  // Where each outer clip lands in the export, less a margin at each end, in seconds.
+  const win0: [number, number] = [0.3, c0.endMs / 1000 - 0.3]
+  const c2Out = c0.endMs + (c1.endMs - c1.startMs) / 2
+  const win2: [number, number] = [c2Out / 1000 + 0.3, total / 1000 - 0.3]
+  const loud0 = volumeOf(baseline, ...win0)
+  const loud2 = volumeOf(baseline, ...win2)
+  const t = loud0 >= loud2 ? 0 : 2
+  const [target, win, otherWin] = t === 0 ? [c0, win0, win2] : [c2, win2, win0]
+  expect(Math.max(loud0, loud2)).toBeGreaterThan(-60)
+
+  // Mute that clip with the button. Nothing else changes.
+  await expect(page.getByTestId("mute-clip")).toBeDisabled()
+  await clickClipAt(t, 0.5)
+  await expect(page.getByTestId("mute-clip")).toHaveText(/Mute clip/)
+  await page.getByTestId("mute-clip").click()
+  await expect(clips.nth(t)).toHaveAttribute("data-muted", "true")
+  await expect(clips.nth(t).getByTestId("clip-muted")).toBeVisible()
+  await expect(page.getByTestId("mute-clip")).toHaveText(/Unmute clip/)
+  await expect(page.getByTestId("mute-clip")).toHaveAttribute("aria-pressed", "true")
+  await expect.poll(async () => (await edits(page)).mutes).toEqual([target])
+  expect(await msOf(page, "time-total")).toBe(total)
+  await expect(clips).toHaveCount(3)
+
+  // The M key mutes and unmutes the middle (sped-up) clip; undo takes it back too.
+  await clickClipAt(1, 0.5)
+  await page.keyboard.press("m")
+  await expect(clips.nth(1)).toHaveAttribute("data-muted", "true")
+  // Touching muted ranges are stored as one; the split still keeps two clips.
+  await expect.poll(async () => (await edits(page)).mutes).toEqual([
+    { startMs: Math.min(target.startMs, c1.startMs), endMs: Math.max(target.endMs, c1.endMs) }
+  ])
+  await expect(clips).toHaveCount(3)
+  await page.keyboard.press("m")
+  await expect(clips.nth(1)).toHaveAttribute("data-muted", "false")
+  await expect.poll(async () => (await edits(page)).mutes).toEqual([target])
+  await page.keyboard.press("m")
+  await expect(clips.nth(1)).toHaveAttribute("data-muted", "true")
+  await page.getByRole("button", { name: "Undo" }).click()
+  await expect(clips.nth(1)).toHaveAttribute("data-muted", "false")
+  await expect.poll(async () => (await edits(page)).mutes).toEqual([target])
+  await expect(clips.nth(1)).toHaveAttribute("data-rate", "2")
+
+  // In the preview, the muted clip plays silently, voiceover included, and the middle one doesn't.
+  const volumes = () => Promise.all([
+    page.getByTestId("screen-video").evaluate((v: HTMLVideoElement) => v.volume),
+    page.getByTestId("camera-video").evaluate((v: HTMLVideoElement) => v.volume)
+  ])
+  await clickClipAt(t, 0.2)
+  await page.keyboard.press("Space")
+  await expect.poll(volumes).toEqual([0, 0])
+  await page.keyboard.press("Space")
+  await clickClipAt(1, 0.2)
+  await page.keyboard.press("Space")
+  await expect.poll(volumes).toEqual([1, 1])
+  await page.keyboard.press("Space")
+
+  // The export is silent through the muted clip and keeps the rest as it was.
+  const file = await exportTo("muted.mp4")
+  expect(Math.abs(Number(ffprobe(file).format.duration) * 1000 - total)).toBeLessThan(150)
+  expect(volumeOf(file, ...win)).toBeLessThan(-80)
+  expect(Math.abs(volumeOf(file, ...otherWin) - volumeOf(baseline, ...otherWin))).toBeLessThan(3)
+  const midWin: [number, number] = [(c0.endMs + 200) / 1000, (c2Out - 200) / 1000]
+  expect(Math.abs(volumeOf(file, ...midWin) - volumeOf(baseline, ...midWin))).toBeLessThan(3)
+})
+
 test("13. settings: switch model, see what's downloaded, delete a model", async ({ page }) => {
   await page.goto("/settings")
   // Base was downloaded for the transcripts above. Download Tiny here, then delete it.

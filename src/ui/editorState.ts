@@ -30,6 +30,8 @@ export interface EditorContextValue {
   /** Clip speeds and the global speed. */
   readonly speed: SpeedMap
   readonly speeds: ReadonlyArray<SpeedRange>
+  /** Source ranges whose sound is muted. */
+  readonly mutes: ReadonlyArray<Cut>
   readonly player: { current: PlayerController | null }
   readonly screenUrl: string | null
   readonly cameraUrl: string | null

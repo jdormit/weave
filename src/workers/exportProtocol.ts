@@ -10,6 +10,8 @@ export interface ExportJob {
   readonly cuts: ReadonlyArray<Cut>
   /** Clip and global playback speeds. */
   readonly speed: SpeedMap
+  /** Source ranges whose sound (screen and voiceover) is left out. */
+  readonly mutes: ReadonlyArray<Cut>
   readonly durationMs: number
   readonly overlay: Overlay
   readonly cameraOffsetMs: number
