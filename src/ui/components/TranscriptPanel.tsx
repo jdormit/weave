@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react"
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react"
+import { isAudible } from "../../domain/camera.ts"
 import { isWordCut, sourceToEdited } from "../../domain/editList.ts"
 import type { Word } from "../../domain/schema.ts"
 import { formatClock, paragraphs } from "../../domain/transcriptFormat.ts"
@@ -98,11 +99,11 @@ const NotTranscribed = () => {
       <p style={{ margin: "0 0 12px", fontSize: 14, lineHeight: 1.5 }}>
         {failed
           ? (job.error ?? "Transcription failed.")
-          : c.recording.hasAudio
+          : isAudible(c.recording)
             ? "This recording isn't transcribed yet."
             : "This recording has no sound to transcribe."}
       </p>
-      {c.recording.hasAudio && (
+      {isAudible(c.recording) && (
         <button className="btn" onClick={() => startTranscription(c.id)}>
           {failed ? "Try again" : "Transcribe"}
         </button>

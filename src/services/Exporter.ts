@@ -68,6 +68,9 @@ export class Exporter extends Context.Service<Exporter, {
           durationMs: o.recording.durationMs,
           overlay: o.recording.overlay,
           cameraOffsetMs: o.recording.cameraOffsetMs,
+          cameraSegments: o.recording.cameraSegments,
+          cameraAudio: o.recording.cameraAudio,
+          screenAudioMuted: o.recording.screenAudioMuted,
           resolution: o.resolution
         })
         return Effect.sync(() => {

@@ -1,6 +1,7 @@
 import { Effect, Option } from "effect"
 import { StorageFailed } from "../domain/errors.ts"
-import type { Recording, Transcript, Word } from "../domain/schema.ts"
+import { cameraAudioOnSource } from "../domain/camera.ts"
+import type { CameraSegment, Recording, Transcript, Word } from "../domain/schema.ts"
 import { RecordingStore } from "./RecordingStore.ts"
 import { Settings } from "./Settings.ts"
 import { Transcriber } from "./Transcriber.ts"
@@ -87,16 +88,37 @@ export const toWords = (raw: ReadonlyArray<RawWord>, durationMs = Infinity): Arr
   }))
 
 /** Decoded 16 kHz audio per recording, kept for silence detection and the waveform. */
-const audioCache = new Map<string, Promise<Float32Array | null>>()
+const audioCache = new Map<string, { key: string; audio: Promise<Float32Array | null> }>()
 
+/**
+ * The recording's sound as 16 kHz mono on the source timeline: the screen's
+ * sound (unless muted) mixed with a voiceover recorded in the editor.
+ */
 export const recordingAudio = Effect.fn("recordingAudio")(function*(id: string) {
   const store = yield* RecordingStore
+  const rec = yield* store.get(id)
+  const key = JSON.stringify([rec.hasAudio, rec.screenAudioMuted, rec.cameraAudio, rec.cameraOffsetMs, rec.cameraSegments])
   const cached = audioCache.get(id)
-  if (cached) return yield* Effect.promise(() => cached)
-  const file = yield* store.readFile(id, "screen.webm")
-  if (Option.isNone(file)) return null
-  const p = decodeAudio16k(file.value).catch(() => null)
-  audioCache.set(id, p)
+  if (cached && cached.key === key) return yield* Effect.promise(() => cached.audio)
+  const screen = rec.hasAudio && !rec.screenAudioMuted ? Option.getOrNull(yield* store.readFile(id, "screen.webm")) : null
+  const camera = rec.cameraAudio ? Option.getOrNull(yield* store.readFile(id, "camera.webm")) : null
+  const p = (async () => {
+    const parts: Array<Float32Array> = []
+    if (screen) {
+      const a = await decodeAudio16k(screen).catch(() => null)
+      if (a) parts.push(a)
+    }
+    if (camera) {
+      const a = await decodeAudio16k(camera).catch(() => null)
+      if (a) parts.push(cameraAudioOnSource(a, rec, rec.durationMs, TRANSCRIBE_RATE))
+    }
+    if (parts.length === 0) return null
+    if (parts.length === 1) return parts[0]!
+    const out = new Float32Array(Math.max(...parts.map((x) => x.length)))
+    for (const part of parts) for (let i = 0; i < part.length; i++) out[i]! += part[i]!
+    return out
+  })()
+  audioCache.set(id, { key, audio: p })
   return yield* Effect.promise(() => p)
 })
 
@@ -148,4 +170,41 @@ export const transcribeRecording = Effect.fn("transcribeRecording")(function*(
   yield* store.putTranscript(transcript)
   yield* store.update(id, (r) => ({ ...r, transcriptStatus: "done" }))
   return transcript
+})
+
+/** A camera and voice take recorded in the editor, to replace the recording's camera file. */
+export interface CameraTake {
+  readonly segments: ReadonlyArray<CameraSegment>
+  readonly hasVideo: boolean
+  readonly hasAudio: boolean
+  readonly keepScreenAudio: boolean
+}
+
+/**
+ * Turns the chunks of a take into the recording's new camera file, and saves
+ * how it lines up with the screen. The old camera file is replaced.
+ */
+export const saveCameraTake = Effect.fn("saveCameraTake")(function*(id: string, take: CameraTake) {
+  const store = yield* RecordingStore
+  const raw = yield* store.assembleChunks(id, "camera")
+  if (Option.isNone(raw) || take.segments.length === 0) {
+    yield* store.clearChunks(id)
+    return yield* new StorageFailed({ message: "Nothing was recorded." })
+  }
+  const fixed = yield* Effect.tryPromise({
+    try: () => remuxWebm(raw.value),
+    catch: (e) => new StorageFailed({ message: `The camera recording couldn't be read: ${String(e)}` })
+  })
+  yield* store.writeFile(id, "camera.webm", fixed.blob)
+  const updated = yield* store.update(id, (r) => ({
+    ...r,
+    hasCamera: take.hasVideo,
+    cameraAudio: take.hasAudio,
+    cameraOffsetMs: 0,
+    cameraSegments: take.segments,
+    screenAudioMuted: r.hasAudio && !take.keepScreenAudio,
+    overlay: take.hasVideo ? { ...r.overlay, visible: true } : r.overlay
+  }))
+  yield* store.clearChunks(id)
+  return updated
 })

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Page } from "@playwright/test"
@@ -597,6 +597,122 @@ test("12. Cancel saves nothing; Restart keeps only the second take, with the bac
   expect(Object.keys(await opfsFiles(page))).toEqual([all[0].id])
   // The editor opens with the blur on.
   await expect(page.locator("[data-testid=bubble] [data-testid=blur-canvas][data-ready=true]")).toBeAttached({ timeout: 30_000 })
+})
+
+/** Mean loudness of a file's audio between two times, in dB. */
+const volumeOf = (file: string, fromSec: number, toSec: number) => {
+  const r = spawnSync("ffmpeg", ["-hide_banner", "-ss", String(fromSec), "-to", String(toSec), "-i", file, "-af", "volumedetect", "-vn", "-f", "null", "-"])
+  const m = /mean_volume: (-?[\d.]+|-inf) dB/.exec(r.stderr.toString())
+  return m ? (m[1] === "-inf" ? -Infinity : Number(m[1])) : -Infinity
+}
+
+test("12b. adds a camera and voice to a screen-only recording, skipping the cut part", async ({ page }) => {
+  // A recording with no camera and no sound.
+  await setUpRecord(page)
+  await page.locator("#cam").selectOption("none")
+  await page.locator("#mic").selectOption("none")
+  await startRecording(page)
+  // Long enough that the take (two thirds of it, after the cut) always has
+  // several seconds of speech: the fake mic's file has a 3.5 s pause.
+  await page.waitForTimeout(12_000)
+  await page.getByRole("button", { name: "Stop", exact: true }).click()
+  await page.waitForURL(/\/r\/[^/]+$/, { timeout: 60_000 })
+  id = page.url().split("/").pop()!
+  await expect(page.getByTestId("editor")).toBeVisible()
+  let rec = await readDb(page, "recordings", id)
+  expect(rec.hasCamera).toBe(false)
+  expect(rec.hasAudio).toBe(false)
+  await expect(page.getByTestId("bubble")).toHaveCount(0)
+  await expect(words(page)).toHaveCount(0)
+
+  // Cut out the middle third on the timeline.
+  const duration = rec.durationMs as number
+  const clips = page.getByTestId("clip")
+  const clickClipAt = async (n: number, frac: number) => {
+    const b = (await clips.nth(n).boundingBox())!
+    await page.mouse.click(b.x + b.width * frac, b.y + b.height / 2)
+  }
+  await clickClipAt(0, 0.35)
+  await page.getByTestId("split").click()
+  await expect(clips).toHaveCount(2)
+  await clickClipAt(1, (0.65 - 0.35) / 0.65)
+  await page.getByTestId("split").click()
+  await expect(clips).toHaveCount(3)
+  await clickClipAt(1, 0.5)
+  await page.getByTestId("delete-clip").click()
+  const [cut] = await savedCuts(page, 1)
+  expect(cut!.endMs - cut!.startMs).toBeGreaterThan(duration * 0.25)
+
+  // Record a camera and voice while the edited video plays.
+  await page.getByRole("button", { name: "Add camera" }).click()
+  const dialog = page.getByTestId("retake")
+  await dialog.locator("#retake-cam").selectOption("default")
+  await dialog.locator("#retake-mic").selectOption("default")
+  await expect(dialog.getByTestId("retake-camera-preview")).toBeVisible()
+  await expect(dialog.getByTestId("keep-screen-audio")).toHaveCount(0)
+  await dialog.getByRole("button", { name: "Start recording" }).click()
+  const bar = page.getByTestId("take-bar")
+  await expect(bar).toHaveAttribute("data-phase", "countdown")
+  await expect(page.getByTestId("take-countdown")).toBeVisible()
+  await expect(bar).toHaveAttribute("data-phase", "recording", { timeout: 10_000 })
+  await expect(page.getByTestId("live-camera")).toBeVisible()
+  // It stops by itself at the end of the video, and saves.
+  await expect(bar).toHaveCount(0, { timeout: duration + 30_000 })
+
+  rec = await readDb(page, "recordings", id)
+  expect(rec.hasCamera).toBe(true)
+  expect(rec.cameraAudio).toBe(true)
+  expect(rec.overlay.visible).toBe(true)
+  const segs = rec.cameraSegments as Array<{ startMs: number; endMs: number; cameraMs: number }>
+  expect(segs.length).toBeGreaterThanOrEqual(2)
+  // The camera covers the kept parts, and nothing inside the cut.
+  const covered = segs.reduce((s, x) => s + x.endMs - x.startMs, 0)
+  expect(Math.abs(covered - (duration - (cut!.endMs - cut!.startMs)))).toBeLessThan(700)
+  const mid = (cut!.startMs + cut!.endMs) / 2
+  expect(segs.some((x) => x.startMs <= mid && mid < x.endMs)).toBe(false)
+  expect(segs.some((x) => x.startMs <= cut!.endMs + 300 && cut!.endMs + 300 < x.endMs)).toBe(true)
+  // The cut part of the camera starts where the first part ended.
+  const after = segs.find((x) => x.startMs >= cut!.startMs)!
+  expect(Math.abs(after.cameraMs - cut!.startMs)).toBeLessThan(400)
+  expect((await opfsFiles(page))[id]).toContain("camera.webm")
+  await expect(page.getByTestId("camera-video")).toBeAttached()
+
+  // The new voice is transcribed. The cut stays.
+  await expect(words(page).first()).toBeVisible({ timeout: 120_000 })
+  await expect.poll(async () => (await readDb(page, "recordings", id)).transcriptStatus, { timeout: 120_000 }).toBe("done")
+  expect((await edits(page)).cuts).toHaveLength(1)
+
+  // Export: the camera and the voice are in the video.
+  const edited = await msOf(page, "time-total")
+  await page.getByRole("button", { name: "Export", exact: true }).click()
+  const exp = page.getByTestId("export")
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 200_000 }),
+    exp.getByTestId("export-video").click()
+  ])
+  const file = join(downloadsDir, `retake-${download.suggestedFilename()}`)
+  await download.saveAs(file)
+  const info = ffprobe(file)
+  const video = info.streams.find((s) => s.codec_type === "video")!
+  expect(info.streams.some((s) => s.codec_type === "audio")).toBe(true)
+  expect(Math.abs(Number(info.format.duration) * 1000 - edited)).toBeLessThan(150)
+  expect(volumeOf(file, 0.5, edited / 1000 - 0.5)).toBeGreaterThan(-45)
+  const { cx, cy, bh } = bubbleBox(rec.overlay, video.width!, video.height!)
+  for (const t of [1, edited / 1000 - 1]) {
+    const cam = pixel(file, t, cx, cy - bh * 0.3)
+    expect(cam.g).toBeGreaterThan(cam.r + 25)
+  }
+  await page.keyboard.press("Escape")
+
+  // Restoring the cut part shows it with no camera there.
+  await page.getByRole("button", { name: "Undo" }).click()
+  await expect.poll(async () => (await edits(page)).cuts.length).toBe(0)
+  // The splits stay, so the restored part is the middle clip.
+  await expect(clips).toHaveCount(3)
+  await clickClipAt(1, 0.5)
+  await expect(page.getByTestId("bubble")).toBeHidden()
+  await clickClipAt(0, 0.4)
+  await expect(page.getByTestId("bubble")).toBeVisible()
 })
 
 test("13. settings: switch model, see what's downloaded, delete a model", async ({ page }) => {

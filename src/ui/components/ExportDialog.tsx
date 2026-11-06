@@ -26,7 +26,7 @@ export const ExportDialog = ({ onClose }: { onClose: () => void }) => {
   const fiber = useRef<Fiber.Fiber<unknown, unknown> | null>(null)
   const title = safeFilename(c.recording.title)
   const edited = editedDuration(c.cuts, c.recording.durationMs)
-  const camera = c.cameraFile && c.recording.overlay.visible
+  const camera = c.cameraFile && c.recording.hasCamera && c.recording.overlay.visible
 
   useEffect(() => () => {
     if (fiber.current) void runtime.runPromise(Fiber.interrupt(fiber.current))
@@ -134,8 +134,10 @@ export const ExportDialog = ({ onClose }: { onClose: () => void }) => {
       {c.cameraFile && (
         <div className="row">
           <div style={{ flex: 1, minWidth: 200 }}>
-            <div className="t">Original camera recording</div>
-            <div className="d tnum">WebM · {formatClock(c.recording.durationMs)} · no sound</div>
+            <div className="t">{c.recording.hasCamera ? "Original camera recording" : "Original voiceover recording"}</div>
+            <div className="d tnum">
+              WebM{c.recording.cameraSegments.length === 0 ? ` · ${formatClock(c.recording.durationMs)}` : ""} · {c.recording.cameraAudio ? "with your voice" : "no sound"}
+            </div>
           </div>
           <button className="btn" onClick={() => c.cameraFile && downloadBlob(c.cameraFile, `${title} (camera).webm`)} data-testid="download-camera">
             Download

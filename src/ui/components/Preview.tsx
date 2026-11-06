@@ -7,7 +7,8 @@ import { formatClock } from "../../domain/transcriptFormat.ts"
 import { Player } from "../../services/Player.ts"
 import { run } from "../../services/runtime.ts"
 import { overlayRect } from "../../workers/exportProtocol.ts"
-import { playheadAtom, playingAtom, useEditor } from "../editorState.ts"
+import { playheadAtom, playingAtom, takeAtom, useEditor, type Take } from "../editorState.ts"
+import { cancelTake, stopTake } from "../retake.ts"
 import { jumpToEnd, jumpToStart, markerAtom, moveBy, returnToMarker, togglePlay } from "../transport.ts"
 import { Icon } from "../Icon.tsx"
 import { BlurredVideo } from "./BlurredVideo.tsx"
@@ -17,6 +18,11 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
   const c = useEditor()
   const screenRef = useRef<HTMLVideoElement>(null)
   const cameraRef = useRef<HTMLVideoElement>(null)
+  const voiceRef = useRef<HTMLAudioElement>(null)
+  const liveRef = useRef<HTMLVideoElement>(null)
+  const take = useAtomValue(takeAtom(c.id))
+  const inTake = take !== null
+  const [cameraActive, setCameraActive] = useState(true)
   const stageWrapRef = useRef<HTMLDivElement>(null)
   const playing = useAtomValue(playingAtom(c.id))
   const playhead = useAtomValue(playheadAtom(c.id))
@@ -36,8 +42,8 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
     return () => ro.disconnect()
   }, [aspect])
 
-  // Attach the player once both videos exist.
-  const hasCamera = !!c.cameraUrl
+  // Attach the player once both videos exist. While a take records, the old camera is left out.
+  const cameraKind = inTake || !c.cameraUrl ? null : c.recording.hasCamera ? "video" : c.recording.cameraAudio ? "audio" : null
   useEffect(() => {
     const screen = screenRef.current
     if (!screen || !c.screenUrl) return
@@ -45,9 +51,10 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
     let ctl: Awaited<ReturnType<typeof attach>> | null = null
     const attach = () =>
       run(Effect.gen(function*() {
-        return yield* (yield* Player).attach(screen, hasCamera ? cameraRef.current : null, {
+        const camera = cameraKind === "video" ? cameraRef.current : cameraKind === "audio" ? voiceRef.current : null
+        return yield* (yield* Player).attach(screen, camera, {
           cuts: c.cuts,
-          cameraOffsetMs: c.recording.cameraOffsetMs,
+          timing: c.recording,
           durationMs: c.recording.durationMs
         })
       }))
@@ -56,6 +63,7 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
       ctl = p
       c.player.current = p
       p.onTime((t) => registry.set(playheadAtom(c.id), t))
+      p.onCameraActive(setCameraActive)
       p.onPlayingChange((v) => {
         registry.set(playingAtom(c.id), v)
         // Like a DAW: when playback stops, the playhead goes back to the start marker.
@@ -68,7 +76,18 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
       ctl?.destroy()
       if (c.player.current === ctl) c.player.current = null
     }
-  }, [c.screenUrl, c.cameraUrl])
+  }, [c.screenUrl, c.cameraUrl, cameraKind, c.recording.cameraSegments, c.recording.cameraOffsetMs])
+
+  // The screen's own sound plays unless it was muted, or a take is recording without it.
+  const screenMuted = take ? !take.keepScreenAudio : c.recording.screenAudioMuted
+  useEffect(() => {
+    if (screenRef.current) screenRef.current.muted = screenMuted
+  }, [screenMuted, c.screenUrl])
+
+  // The live camera while a take records.
+  useEffect(() => {
+    if (liveRef.current) liveRef.current.srcObject = take?.camera ?? null
+  }, [take?.camera])
 
   // Keep the player's cut list current.
   useEffect(() => {
@@ -90,19 +109,37 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
               preload="auto"
               playsInline
               data-testid="screen-video"
-              onClick={() => togglePlay(c)}
+              onClick={() => !inTake && togglePlay(c)}
             />
           )}
-          {c.cameraUrl && (
-            <Bubble overlay={c.recording.overlay} stage={box} aspect={aspect}>
+          {cameraKind === "video" && (
+            <Bubble overlay={c.recording.overlay} stage={box} aspect={aspect} hidden={!cameraActive}>
               <BlurredVideo videoRef={cameraRef} blur={c.recording.overlay.blur}>
-                <video ref={cameraRef} src={c.cameraUrl} muted playsInline preload="auto" data-testid="camera-video" />
+                <video
+                  ref={cameraRef}
+                  src={c.cameraUrl!}
+                  muted={!c.recording.cameraAudio}
+                  playsInline
+                  preload="auto"
+                  data-testid="camera-video"
+                />
               </BlurredVideo>
             </Bubble>
           )}
+          {cameraKind === "audio" && <audio ref={voiceRef} src={c.cameraUrl!} preload="auto" data-testid="voiceover-audio" />}
+          {take?.camera && (
+            <Bubble overlay={{ ...c.recording.overlay, visible: true }} stage={box} aspect={aspect}>
+              <BlurredVideo videoRef={liveRef} blur={c.recording.overlay.blur}>
+                <video ref={liveRef} autoPlay muted playsInline data-testid="live-camera" />
+              </BlurredVideo>
+            </Bubble>
+          )}
+          {take?.phase === "countdown" && (
+            <div className="take-countdown" data-testid="take-countdown"><div className="countdown">{take.count}</div></div>
+          )}
         </div>
       </div>
-      <div className="transport">
+      {take ? <TakeBar take={take} now={now} total={total} /> : <div className="transport">
         <div className="transport-btns" role="group" aria-label="Playback">
           <button className="iconbtn" aria-label="Jump to start" title="Jump to start (Home)" onClick={() => jumpToStart(c)}>
             <Icon name="toStart" />
@@ -129,7 +166,7 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
           <span data-testid="time-now" data-ms={Math.round(now)}>{formatClock(now)}</span>{" "}
           <span style={{ color: "var(--muted)", fontWeight: 400 }}>/ <span data-testid="time-total" data-ms={Math.round(total)}>{formatClock(total)}</span></span>
         </span>
-        {c.cameraUrl && !c.recording.overlay.visible && (
+        {cameraKind === "video" && !c.recording.overlay.visible && (
           <button className="btn ghost" onClick={() => updateRecording(c.id, (r) => ({ ...r, overlay: { ...r.overlay, visible: true } }))}>
             <Icon name="camera" />Show camera
           </button>
@@ -138,8 +175,33 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
         <button className="btn ghost" style={{ fontSize: 13 }} onClick={() => window.dispatchEvent(new Event("weave:shortcuts"))}>
           Shortcuts <kbd>?</kbd>
         </button>
-      </div>
+      </div>}
     </section>
+  )
+}
+
+/** Shown in place of the playback buttons while a take records. */
+const TakeBar = ({ take, now, total }: { take: Take; now: number; total: number }) => {
+  const c = useEditor()
+  return (
+    <div className="transport" data-testid="take-bar" data-phase={take.phase}>
+      <span className="rec" aria-hidden="true" />
+      <b style={{ fontWeight: 550, fontSize: 14 }}>
+        {take.phase === "countdown" ? "Get ready…" : take.phase === "recording" ? "Recording camera and voice" : "Saving…"}
+      </b>
+      <span className="tnum" style={{ fontSize: 14 }}>
+        {formatClock(now)} <span style={{ color: "var(--muted)" }}>/ {formatClock(total)}</span>
+      </span>
+      <div className="spacer" />
+      {take.phase !== "saving" && (
+        <>
+          <button className="btn ghost" onClick={() => void cancelTake(c.id)}>Cancel</button>
+          <button className="btn primary" onClick={() => void stopTake(c.id)} disabled={take.phase !== "recording"}>
+            <Icon name="stop" />Stop and save
+          </button>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -151,11 +213,14 @@ const Bubble = ({
   overlay,
   stage,
   aspect,
+  hidden,
   children
 }: {
   overlay: Overlay
   stage: { w: number; h: number }
   aspect: number
+  /** Hidden where the camera has nothing to show at the playhead. */
+  hidden?: boolean
   children: React.ReactNode
 }) => {
   const c = useEditor()
@@ -235,7 +300,7 @@ const Bubble = ({
       className="bubble"
       data-testid="bubble"
       data-shape={o.shape}
-      style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, display: o.visible && stage.w > 0 ? undefined : "none" }}
+      style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, display: o.visible && !hidden && stage.w > 0 ? undefined : "none" }}
       onPointerDown={(e) => startDrag(e, "move")}
       tabIndex={0}
       role="group"

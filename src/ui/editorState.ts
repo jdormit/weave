@@ -41,3 +41,17 @@ export const useEditor = (): EditorContextValue => {
   if (!v) throw new Error("useEditor must be used inside the editor")
   return v
 }
+
+/** A camera and voice take being recorded in the editor. */
+export interface Take {
+  readonly phase: "countdown" | "recording" | "saving"
+  readonly count: number
+  /** The live camera, shown in the bubble while recording. */
+  readonly camera: MediaStream | null
+  readonly keepScreenAudio: boolean
+  /** performance.now() when recording started. */
+  readonly startedAt: number
+}
+export const takeAtom = Atom.family((_id: string) => Atom.make<Take | null>(null).pipe(Atom.keepAlive))
+/** Goes up when the recording's media files change, so the editor reloads them. */
+export const mediaVersionAtom = Atom.family((_id: string) => Atom.make(0).pipe(Atom.keepAlive))

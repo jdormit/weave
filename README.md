@@ -13,6 +13,7 @@ Everything stays in your browser. Recordings are saved on your device, and speec
 - **Clean up** long pauses and filler words ("um", "uh") in one step.
 - **Place the camera.** Drag and resize the camera bubble, make it a circle or a rounded rectangle, or hide it.
 - **Blur your background.** Turn it on before recording to see it live, or on and off in the editor. The camera file is kept as recorded, so the blur is applied in the preview and at export.
+- **Re-record the camera and voice later.** In the editor, record a new camera and voiceover while the video plays back, skipping the parts you cut. A screen-only recording can get a camera and narration this way. You can keep or mute the original sound; the new sound is transcribed again, and your cuts stay.
 - **Export** an MP4 with your edits and the camera bubble burned in, the original screen and camera files, and the transcript as SRT, VTT, TXT or JSON. Subtitles use the edited timing.
 
 Weave works best in Chrome, Edge and other Chromium browsers. Other browsers are missing parts of the screen recording and video encoding APIs it needs.

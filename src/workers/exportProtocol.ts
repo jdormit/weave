@@ -1,4 +1,4 @@
-import type { Cut, Overlay } from "../domain/schema.ts"
+import type { CameraSegment, Cut, Overlay } from "../domain/schema.ts"
 
 export type Resolution = "source" | "1080" | "720"
 
@@ -10,6 +10,11 @@ export interface ExportJob {
   readonly durationMs: number
   readonly overlay: Overlay
   readonly cameraOffsetMs: number
+  readonly cameraSegments: ReadonlyArray<CameraSegment>
+  /** Include the camera file's voiceover track. */
+  readonly cameraAudio: boolean
+  /** Leave out the screen file's sound. */
+  readonly screenAudioMuted: boolean
   readonly resolution: Resolution
 }
 

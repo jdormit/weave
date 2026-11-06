@@ -9,10 +9,11 @@ import { recordingAudio } from "../../services/workflows.ts"
 import { CleanupDialog } from "../components/CleanupDialog.tsx"
 import { Dialog } from "../components/Dialog.tsx"
 import { ExportDialog } from "../components/ExportDialog.tsx"
+import { RetakeDialog } from "../components/RetakeDialog.tsx"
 import { Preview } from "../components/Preview.tsx"
 import { Timeline } from "../components/Timeline.tsx"
 import { TranscriptPanel } from "../components/TranscriptPanel.tsx"
-import { EditorContext, playheadAtom, selectedClipAtom, selectionAtom, zoomAtom, type EditorContextValue } from "../editorState.ts"
+import { EditorContext, mediaVersionAtom, playheadAtom, takeAtom, selectedClipAtom, selectionAtom, zoomAtom, type EditorContextValue } from "../editorState.ts"
 import { Icon } from "../Icon.tsx"
 import { onLinkClick } from "../router.ts"
 import { jumpToEnd, jumpToStart, moveBy, togglePlay } from "../transport.ts"
@@ -30,7 +31,7 @@ import {
   updateRecording
 } from "../state.ts"
 
-const useMediaFiles = (id: string, ready: boolean) => {
+const useMediaFiles = (id: string, ready: boolean, version: number) => {
   const [files, setFiles] = useState<{ screen: File | null; camera: File | null; screenUrl: string | null; cameraUrl: string | null }>({
     screen: null,
     camera: null,
@@ -58,7 +59,7 @@ const useMediaFiles = (id: string, ready: boolean) => {
       alive = false
       urls.forEach((u) => URL.revokeObjectURL(u))
     }
-  }, [id, ready])
+  }, [id, ready, version])
   return files
 }
 
@@ -73,7 +74,9 @@ export const Editor = ({ id }: { id: string }) => {
   const partial = useAtomValue(partialWordsAtom(id))
   const edits = useAtomValue(editsAtom(id))
   const loadError = useAtomValue(loadErrorAtom(id))
-  const [dialog, setDialog] = useState<"cleanup" | "export" | "shortcuts" | null>(null)
+  const [dialog, setDialog] = useState<"cleanup" | "export" | "shortcuts" | "retake" | null>(null)
+  const mediaVersion = useAtomValue(mediaVersionAtom(id))
+  const take = useAtomValue(takeAtom(id))
   const [audio, setAudio] = useState<Float32Array | null>(null)
   const player = useRef<PlayerController | null>(null)
 
@@ -83,7 +86,7 @@ export const Editor = ({ id }: { id: string }) => {
     registry.set(selectedClipAtom(id), null)
   }, [id])
   const ready = recording?.status === "ready"
-  const media = useMediaFiles(id, ready)
+  const media = useMediaFiles(id, ready, mediaVersion)
   useEffect(() => {
     if (!ready) return
     let alive = true
@@ -91,7 +94,7 @@ export const Editor = ({ id }: { id: string }) => {
     return () => {
       alive = false
     }
-  }, [id, ready])
+  }, [id, ready, mediaVersion, recording?.screenAudioMuted])
 
   const words = transcript?.words ?? partial
   const ctx = useMemo<EditorContextValue | null>(
@@ -122,7 +125,7 @@ export const Editor = ({ id }: { id: string }) => {
   dialogRef.current = dialog
   const onKey = useCallback((e: KeyboardEvent) => {
     const c = ctxRef.current
-    if (!c || dialogRef.current || isTyping(e)) return
+    if (!c || dialogRef.current || registry.get(takeAtom(id)) || isTyping(e)) return
     const mod = e.metaKey || e.ctrlKey
     const key = e.key
     if (mod && (key === "z" || key === "Z")) {
@@ -208,10 +211,18 @@ export const Editor = ({ id }: { id: string }) => {
             <Icon name="redo" />
           </button>
           <span className="vsep" />
-          <button className="btn small" onClick={() => setDialog("cleanup")} disabled={!transcript}>
+          <button
+            className="btn small"
+            onClick={() => setDialog("retake")}
+            disabled={take !== null}
+            title="Record your camera and voice again while the video plays"
+          >
+            <Icon name="camera" />{recording.hasCamera || recording.cameraAudio ? "Re-record camera" : "Add camera"}
+          </button>
+          <button className="btn small" onClick={() => setDialog("cleanup")} disabled={!transcript || take !== null}>
             <Icon name="cleanup" />Clean up
           </button>
-          <button className="btn primary small" onClick={() => setDialog("export")}>
+          <button className="btn primary small" onClick={() => setDialog("export")} disabled={take !== null}>
             <Icon name="download" />Export
           </button>
         </header>
@@ -219,6 +230,7 @@ export const Editor = ({ id }: { id: string }) => {
         <Timeline />
         {dialog === "cleanup" && <CleanupDialog onClose={() => setDialog(null)} />}
         {dialog === "export" && <ExportDialog onClose={() => setDialog(null)} />}
+        {dialog === "retake" && <RetakeDialog onClose={() => setDialog(null)} />}
         {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
         <ShortcutsButtonPortal onOpen={() => setDialog("shortcuts")} />
       </div>
