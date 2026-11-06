@@ -612,7 +612,9 @@ test("12b. adds a camera and voice to a screen-only recording, skipping the cut 
   await page.locator("#cam").selectOption("none")
   await page.locator("#mic").selectOption("none")
   await startRecording(page)
-  await page.waitForTimeout(7_000)
+  // Long enough that the take (two thirds of it, after the cut) always has
+  // several seconds of speech: the fake mic's file has a 3.5 s pause.
+  await page.waitForTimeout(12_000)
   await page.getByRole("button", { name: "Stop", exact: true }).click()
   await page.waitForURL(/\/r\/[^/]+$/, { timeout: 60_000 })
   id = page.url().split("/").pop()!
