@@ -107,6 +107,8 @@ export const Editor = ({ id }: { id: string }) => {
           words,
           cuts: edits.cuts,
           splits: edits.splits,
+          speeds: edits.speeds,
+          speed: { ranges: edits.speeds, global: edits.speed },
           player,
           screenUrl: media.screenUrl,
           cameraUrl: media.cameraUrl,
@@ -342,7 +344,7 @@ export const restoreSelection = (c: EditorContextValue) => {
   if (c.words.slice(lo, hi + 1).every((w) => isWordCut(c.cuts, w))) deleteSelection(c)
 }
 
-export const editedLength = (c: EditorContextValue) => editedDuration(c.cuts, c.recording.durationMs)
+export const editedLength = (c: EditorContextValue) => editedDuration(c.cuts, c.recording.durationMs, c.speed)
 
 const SHORTCUTS: ReadonlyArray<[string, ReadonlyArray<string>]> = [
   ["Play from the start marker, or stop and go back to it", ["Space"]],

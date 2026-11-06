@@ -2,7 +2,9 @@ import { useAtomValue } from "@effect/atom-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { clips as makeClips, editedDuration, editedToSource, sourceToEdited, totalCutMs, trimClip, type Clip } from "../../domain/editList.ts"
 import { normalizeCuts } from "../../domain/editList.ts"
+import { CLIP_SPEEDS, formatRate, isNormal, setSpeed } from "../../domain/speed.ts"
 import { formatClock } from "../../domain/transcriptFormat.ts"
+import { SpeedSelect } from "./SpeedSelect.tsx"
 import { filmstrip, peaks, TRANSCRIBE_RATE } from "../../services/media.ts"
 import { playheadAtom, selectedClipAtom, selectionAtom, useEditor, zoomAtom } from "../editorState.ts"
 import { markerAtom, moveTo } from "../transport.ts"
@@ -44,7 +46,8 @@ export const Timeline = () => {
   const [width, setWidth] = useState(800)
   const duration = c.recording.durationMs
   const cuts = useMemo(() => normalizeCuts(c.cuts, duration), [c.cuts, duration])
-  const edited = editedDuration(cuts, duration)
+  const speed = c.speed
+  const edited = editedDuration(cuts, duration, speed)
   const aspect = c.recording.screen.width / Math.max(1, c.recording.screen.height) || 16 / 9
   const frames = useFrames(c.screenFile, duration, aspect)
 
@@ -71,10 +74,11 @@ export const Timeline = () => {
 
   const pxPerMs = (Math.max(200, width - 2) * zoom) / Math.max(1, edited)
   const innerWidth = Math.max(width, edited * pxPerMs)
-  const clipList = useMemo(() => makeClips(cuts, c.splits, duration), [cuts, c.splits, duration])
+  const clipList = useMemo(() => makeClips(cuts, c.splits, duration, c.speeds), [cuts, c.splits, duration, c.speeds])
+  const selected = selectedClip ? clipList.find((k) => k.startMs === selectedClip.startMs && k.endMs === selectedClip.endMs) ?? null : null
 
   // Keep the playhead in view while playing.
-  const playheadX = sourceToEdited(cuts, playhead) * pxPerMs
+  const playheadX = sourceToEdited(cuts, playhead, speed) * pxPerMs
   useEffect(() => {
     const el = scrollRef.current
     if (!el || zoom <= 1) return
@@ -88,7 +92,7 @@ export const Timeline = () => {
     const x = clientX - el.getBoundingClientRect().left + el.scrollLeft
     // Snap to the very start, which is otherwise hard to hit at the edge.
     const editedMs = x < 6 ? 0 : Math.max(0, Math.min(edited, x / pxPerMs))
-    moveTo(c, editedToSource(cuts, editedMs))
+    moveTo(c, editedToSource(cuts, editedMs, speed))
   }
 
   /** Press and drag to scrub: the marker follows the pointer until it's released. */
@@ -108,7 +112,7 @@ export const Timeline = () => {
     window.addEventListener("pointercancel", up)
   }
   const marker = useAtomValue(markerAtom(c.id))
-  const markerX = sourceToEdited(cuts, marker) * pxPerMs
+  const markerX = sourceToEdited(cuts, marker, speed) * pxPerMs
 
   // Ruler ticks every "nice" interval.
   const ticks = useMemo(() => {
@@ -138,6 +142,18 @@ export const Timeline = () => {
         >
           <Icon name="trash" />Delete clip <kbd>⌫</kbd>
         </button>
+        <SpeedSelect
+          label="Clip speed"
+          value={selected?.rate ?? 1}
+          options={CLIP_SPEEDS}
+          disabled={!selected}
+          testId="clip-speed"
+          title={selected ? "Speed of the selected clip" : "Select a clip to change its speed"}
+          onChange={(rate) => {
+            if (!selected) return
+            applyEdit(c.id, (s) => ({ ...s, speeds: setSpeed(s.speeds, selected.startMs, selected.endMs, rate) }))
+          }}
+        />
         <span className="vsep" />
         <button className="iconbtn" aria-label="Zoom out" disabled={zoom <= 1} onClick={() => registry.update(zoomAtom(c.id), (z) => Math.max(1, z / 1.5))}>
           <Icon name="minus" />
@@ -147,7 +163,9 @@ export const Timeline = () => {
         </button>
         <div className="spacer" />
         <span className="tnum" style={{ fontSize: 13, color: "var(--muted)" }} data-testid="timeline-stats">
-          {cutMs > 0 ? `${formatClock(edited)} after cuts · ${formatClock(cutMs)} cut from ${formatClock(duration)}` : formatClock(duration)}
+          {cutMs > 0
+            ? `${formatClock(edited)} after ${isNormal(speed) ? "cuts" : "edits"} · ${formatClock(cutMs)} cut from ${formatClock(duration)}`
+            : isNormal(speed) ? formatClock(duration) : `${formatClock(edited)} after speed changes · ${formatClock(duration)} recorded`}
         </span>
       </div>
       <div className="tlscroll" ref={scrollRef}>
@@ -169,9 +187,9 @@ export const Timeline = () => {
               <ClipView
                 key={`${clip.startMs}-${clip.endMs}`}
                 clip={clip}
-                left={sourceToEdited(cuts, clip.startMs) * pxPerMs}
-                width={Math.max(MIN_CLIP_PX, (clip.endMs - clip.startMs) * pxPerMs)}
-                pxPerMs={pxPerMs}
+                left={sourceToEdited(cuts, clip.startMs, speed) * pxPerMs}
+                width={Math.max(MIN_CLIP_PX, ((clip.endMs - clip.startMs) / (clip.rate * speed.global)) * pxPerMs)}
+                pxPerMs={pxPerMs / (clip.rate * speed.global)}
                 frames={frames}
                 selected={!!selectedClip && selectedClip.startMs === clip.startMs && selectedClip.endMs === clip.endMs}
                 onSelect={(clientX) => {
@@ -186,7 +204,7 @@ export const Timeline = () => {
                 key={`${cut.startMs}`}
                 className="cutmark"
                 data-testid="cutmark"
-                style={{ left: sourceToEdited(cuts, cut.startMs) * pxPerMs }}
+                style={{ left: sourceToEdited(cuts, cut.startMs, speed) * pxPerMs }}
                 title={`Cut: ${formatClock(cut.endMs - cut.startMs)}`}
               />
             ))}
@@ -212,6 +230,7 @@ const ClipView = ({
   clip: Clip
   left: number
   width: number
+  /** Pixels per millisecond of this clip's source, which is narrower where it's sped up. */
   pxPerMs: number
   frames: ReadonlyArray<{ t: number; url: string | null }>
   selected: boolean
@@ -264,7 +283,13 @@ const ClipView = ({
       if (Math.abs(deltaMs) < 1) return
       const target = edge === "start" ? clip.startMs + deltaMs : clip.endMs + deltaMs
       const bounded = boundTrim(c.cuts, c.splits, clip, edge, target, c.recording.durationMs)
-      applyEdit(c.id, (s) => ({ ...s, cuts: trimClip(s.cuts, clip, edge, bounded, c.recording.durationMs) }))
+      // Part brought back by moving an edge outward gets the clip's speed.
+      const grown = edge === "start" ? (bounded < clip.startMs ? [bounded, clip.startMs] : null) : (bounded > clip.endMs ? [clip.endMs, bounded] : null)
+      applyEdit(c.id, (s) => ({
+        ...s,
+        cuts: trimClip(s.cuts, clip, edge, bounded, c.recording.durationMs),
+        speeds: grown && clip.rate !== 1 ? setSpeed(s.speeds, grown[0]!, grown[1]!, clip.rate) : s.speeds
+      }))
       registry.set(selectedClipAtom(c.id), null)
     }
     window.addEventListener("pointermove", move)
@@ -279,11 +304,13 @@ const ClipView = ({
       data-testid="clip"
       data-start={clip.startMs}
       data-end={clip.endMs}
+      data-rate={clip.rate}
       style={{ left: left + shiftL, width: Math.max(MIN_CLIP_PX, width - shiftL + shiftR) }}
       onMouseDown={(e) => {
         if (e.button === 0) onSelect(e.clientX)
       }}
     >
+      {clip.rate !== 1 && <span className="rate" data-testid="clip-rate">{formatRate(clip.rate)}</span>}
       <div className="film" aria-hidden="true">
         {tiles.map((u, j) => (u ? <img key={j} src={u} alt="" style={{ width: frameW }} /> : <i key={j} style={{ width: frameW }} />))}
       </div>

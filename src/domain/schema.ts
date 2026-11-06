@@ -43,12 +43,15 @@ export type ScreenInfo = typeof ScreenInfo.Type
 /**
  * A stretch of source time covered by a camera take that was recorded in the
  * editor, while the video played back. cameraMs is the camera file's time at
- * startMs; within the stretch both run at the same speed.
+ * startMs. rate is how many milliseconds of source played per millisecond of
+ * camera, which is the speed the video played at while the take recorded.
  */
 export const CameraSegment = Schema.Struct({
   startMs: Schema.Number,
   endMs: Schema.Number,
-  cameraMs: Schema.Number
+  cameraMs: Schema.Number,
+  /** Takes saved before speeds existed decode as 1. */
+  rate: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(1)))
 })
 export type CameraSegment = typeof CameraSegment.Type
 
@@ -100,9 +103,25 @@ export const Cut = Schema.Struct({
 })
 export type Cut = typeof Cut.Type
 
+/** A stretch of source time that plays at a speed other than normal. */
+export const SpeedRange = Schema.Struct({
+  startMs: Schema.Number,
+  endMs: Schema.Number,
+  rate: Schema.Number
+})
+export type SpeedRange = typeof SpeedRange.Type
+
+const speedFields = {
+  /** Clip speeds, by source range. Edits saved before speeds existed decode as none. */
+  speeds: Schema.Array(SpeedRange).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  /** The whole video's speed, which multiplies each clip's speed. */
+  speed: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(1)))
+}
+
 export const EditState = Schema.Struct({
   cuts: Schema.Array(Cut),
-  splits: Schema.Array(Schema.Number)
+  splits: Schema.Array(Schema.Number),
+  ...speedFields
 })
 export type EditState = typeof EditState.Type
 
@@ -110,6 +129,7 @@ export const EditList = Schema.Struct({
   recordingId: Schema.String,
   cuts: Schema.Array(Cut),
   splits: Schema.Array(Schema.Number),
+  ...speedFields,
   past: Schema.Array(EditState),
   future: Schema.Array(EditState)
 })
@@ -160,6 +180,8 @@ export const TranscriptExport = Schema.Struct({
     endMs: Schema.Number,
     cut: Schema.Boolean
   })),
-  cuts: Schema.Array(Cut)
+  cuts: Schema.Array(Cut),
+  /** Word times are source times; these speeds turn them into edited times. */
+  ...speedFields
 })
 export type TranscriptExport = typeof TranscriptExport.Type

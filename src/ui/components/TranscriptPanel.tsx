@@ -193,7 +193,7 @@ const Words = ({ showCut }: { showCut: boolean }) => {
         return (
           <div className="para" key={p.firstIndex}>
             <button className="ts tnum" onClick={() => moveTo(c, p.startMs)}>
-              {formatClock(sourceToEdited(c.cuts, p.startMs))}
+              {formatClock(sourceToEdited(c.cuts, p.startMs, c.speed))}
             </button>
             <p className="tx">
               {p.words.map((w, j) => {

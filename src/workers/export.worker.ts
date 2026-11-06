@@ -22,7 +22,8 @@ import {
 import { createCompositor, type Compositor } from "../blur/compose.ts"
 import { createSegmenter, type Segmenter } from "../blur/segmenter.ts"
 import { cameraRanges, cameraTimeAt, screenRanges, type FileRange } from "../domain/camera.ts"
-import { keptSegments } from "../domain/editList.ts"
+import { outputPieces } from "../domain/editList.ts"
+import { TimeStretcher } from "../domain/stretch.ts"
 import type { ExportJob, ExportRequest, ExportResponse } from "./exportProtocol.ts"
 import { outputSize, overlayRect } from "./exportProtocol.ts"
 
@@ -73,8 +74,8 @@ const run = async (job: ExportJob) => {
     const cameraTrack = job.overlay.visible && cameraInput ? await cameraInput.getPrimaryVideoTrack() : null
     // The sound tracks to mix, each with the parts of its file that are kept.
     const audioInputs: Array<{ track: InputAudioTrack; ranges: ReadonlyArray<FileRange> }> = []
-    if (screenAudio) audioInputs.push({ track: screenAudio, ranges: screenRanges(job.cuts, job.durationMs) })
-    if (cameraAudio) audioInputs.push({ track: cameraAudio, ranges: cameraRanges(job.cuts, job.durationMs, job) })
+    if (screenAudio) audioInputs.push({ track: screenAudio, ranges: screenRanges(job.cuts, job.durationMs, job.speed) })
+    if (cameraAudio) audioInputs.push({ track: cameraAudio, ranges: cameraRanges(job.cuts, job.durationMs, job, job.speed) })
 
     const { width, height } = outputSize(screenTrack.displayWidth, screenTrack.displayHeight, job.resolution)
     const plan = await choosePlan(width, height, audioInputs.length > 0)
@@ -94,19 +95,18 @@ const run = async (job: ExportJob) => {
     if (audioSource) output.addAudioTrack(audioSource)
     await output.start()
 
-    const segments = keptSegments(job.cuts, job.durationMs)
-    const totalMs = segments.reduce((s, x) => s + x.endMs - x.startMs, 0)
+    const segments = outputPieces(job.cuts, job.durationMs, job.speed)
+    const totalMs = segments.reduce((s, x) => s + x.outLenMs, 0)
 
     // Source times of every output frame. Frame boundaries are rounded on the
     // running edited time, so the total length stays within one frame.
     const frameTimes: Array<number> = []
-    let editedStart = 0
     for (const seg of segments) {
-      const editedEnd = editedStart + (seg.endMs - seg.startMs) / 1000
+      const editedStart = seg.outMs / 1000
+      const editedEnd = (seg.outMs + seg.outLenMs) / 1000
       const first = Math.round(editedStart * FPS)
       const last = Math.round(editedEnd * FPS)
-      for (let f = first; f < last; f++) frameTimes.push(seg.startMs / 1000 + (f / FPS - editedStart))
-      editedStart = editedEnd
+      for (let f = first; f < last; f++) frameTimes.push(seg.startMs / 1000 + (f / FPS - editedStart) * seg.rate)
     }
 
     const bubble = overlayRect(job.overlay, width, height)
@@ -214,6 +214,19 @@ async function* pieces(track: InputAudioTrack, ranges: ReadonlyArray<FileRange>)
   for (const r of ranges) {
     const a = r.fromMs / 1000
     const b = r.toMs / 1000
+    // Sped-up or slowed-down parts change length without changing pitch.
+    const ratio = (r.toMs - r.fromMs) / Math.max(1e-6, r.outEndMs - r.outMs)
+    const stretched = Math.abs(ratio - 1) > 0.001
+    let stretcher: TimeStretcher | null = null
+    let stretchRate = 0
+    let produced = 0
+    let started = false
+    const fromStretcher = (planes: Array<Float32Array>): Piece | null => {
+      if (planes[0]!.length === 0) return null
+      const p = { outSec: r.outMs / 1000 + produced / stretchRate, rate: stretchRate, planes }
+      produced += planes[0]!.length
+      return p
+    }
     for await (const sample of sink.samples(a, b)) {
       checkCanceled()
       const rate = sample.sampleRate
@@ -226,9 +239,26 @@ async function* pieces(track: InputAudioTrack, ranges: ReadonlyArray<FileRange>)
           sample.copyTo(buf, { planeIndex: c, format: "f32-planar", frameOffset: from, frameCount: to - from })
           planes.push(buf)
         }
-        yield { outSec: r.outMs / 1000 + Math.max(0, sample.timestamp + from / rate - a), rate, planes }
+        if (!stretched) {
+          yield { outSec: r.outMs / 1000 + Math.max(0, sample.timestamp + from / rate - a), rate, planes }
+        } else {
+          if (!stretcher) {
+            stretcher = new TimeStretcher(planes.length, rate, ratio)
+            stretchRate = rate
+            // A gap at the start of the range (the audio starting late) stays a gap.
+            produced = Math.max(0, Math.round(((sample.timestamp + from / rate - a) / ratio) * rate))
+          }
+          started = true
+          stretcher.push(planes)
+          const piece = fromStretcher(stretcher.pull())
+          if (piece) yield piece
+        }
       }
       sample.close()
+    }
+    if (stretcher && started) {
+      const piece = fromStretcher(stretcher.flush())
+      if (piece) yield piece
     }
   }
 }

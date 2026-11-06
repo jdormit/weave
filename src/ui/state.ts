@@ -111,11 +111,11 @@ const persistEdits = (edits: EditList) => {
   void run(Effect.gen(function*() { yield* (yield* RecordingStore).putEdits(edits) })).catch(toastError)
 }
 
-/** Applies a change to the cuts and splits as one undoable step. */
+/** Applies a change to the cuts, splits and speeds as one undoable step. */
 export const applyEdit = (id: string, f: (state: EditState) => EditState) => {
   const current = registry.get(editsAtom(id))
   if (!current) return
-  const next = commit(current, f({ cuts: current.cuts, splits: current.splits }))
+  const next = commit(current, f({ cuts: current.cuts, splits: current.splits, speeds: current.speeds, speed: current.speed }))
   if (next === current) return
   registry.set(editsAtom(id), next)
   persistEdits(next)

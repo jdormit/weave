@@ -715,6 +715,130 @@ test("12b. adds a camera and voice to a screen-only recording, skipping the cut 
   await expect(page.getByTestId("bubble")).toBeVisible()
 })
 
+test("12c. speeds up part of a silent recording, then adds a voice over the edited version", async ({ page }) => {
+  // A screen recording with no camera and no sound. The last test already
+  // chose no camera, which the record screen remembers.
+  await page.goto("/record")
+  const sysAudio = page.getByTestId("system-audio")
+  if ((await sysAudio.count()) > 0 && (await sysAudio.isChecked())) await sysAudio.uncheck()
+  await page.locator("#cam").selectOption("none")
+  await page.locator("#mic").selectOption("none")
+  await startRecording(page)
+  await page.waitForTimeout(12_000)
+  await page.getByRole("button", { name: "Stop", exact: true }).click()
+  await page.waitForURL(/\/r\/[^/]+$/, { timeout: 60_000 })
+  id = page.url().split("/").pop()!
+  await expect(page.getByTestId("editor")).toBeVisible()
+  const duration = (await readDb(page, "recordings", id)).durationMs as number
+  await expect.poll(() => msOf(page, "time-total")).toBe(duration)
+
+  // Split into thirds and play the middle one at 2x.
+  const clips = page.getByTestId("clip")
+  const clickClipAt = async (n: number, frac: number) => {
+    const b = (await clips.nth(n).boundingBox())!
+    await page.mouse.click(b.x + b.width * frac, b.y + b.height / 2)
+  }
+  await clickClipAt(0, 0.35)
+  await page.getByTestId("split").click()
+  await clickClipAt(1, (0.65 - 0.35) / 0.65)
+  await page.getByTestId("split").click()
+  await expect(clips).toHaveCount(3)
+  await expect(page.getByTestId("clip-speed")).toBeDisabled()
+  await clickClipAt(1, 0.5)
+  await page.getByTestId("clip-speed").selectOption("2")
+  await expect(clips.nth(1)).toHaveAttribute("data-rate", "2")
+  await expect(clips.nth(1).getByTestId("clip-rate")).toHaveText("2×")
+  const mid = { startMs: Number(await clips.nth(1).getAttribute("data-start")), endMs: Number(await clips.nth(1).getAttribute("data-end")) }
+  const midLen = mid.endMs - mid.startMs
+  await expect.poll(async () => (await edits(page)).speeds).toEqual([{ ...mid, rate: 2 }])
+  await expect.poll(async () => Math.abs((await msOf(page, "time-total")) - (duration - midLen / 2))).toBeLessThanOrEqual(1)
+  // The sped-up clip is drawn at half its width.
+  const w0 = (await clips.nth(0).boundingBox())!.width / ((Number(await clips.nth(0).getAttribute("data-end")) - 0) / 1000)
+  const w1 = (await clips.nth(1).boundingBox())!.width / (midLen / 1000)
+  expect(w1 / w0).toBeGreaterThan(0.4)
+  expect(w1 / w0).toBeLessThan(0.6)
+
+  // The whole video at 1.5x scales every clip, keeping the middle one twice as fast.
+  await page.getByTestId("global-speed").selectOption("1.5")
+  await expect.poll(async () => (await edits(page)).speed).toBe(1.5)
+  await expect.poll(async () => Math.abs((await msOf(page, "time-total")) - (duration - midLen / 2) / 1.5)).toBeLessThanOrEqual(1)
+  const edited = await msOf(page, "time-total")
+
+  // Record a camera and voice while the edited video plays at those speeds.
+  await page.getByRole("button", { name: "Add camera" }).click()
+  const dialog = page.getByTestId("retake")
+  await dialog.locator("#retake-cam").selectOption("default")
+  await dialog.locator("#retake-mic").selectOption("default")
+  await expect(dialog.getByTestId("retake-camera-preview")).toBeVisible()
+  await dialog.getByRole("button", { name: "Start recording" }).click()
+  const bar = page.getByTestId("take-bar")
+  await expect(bar).toHaveAttribute("data-phase", "recording", { timeout: 15_000 })
+  await expect(bar).toHaveCount(0, { timeout: edited + 30_000 })
+
+  // Each part of the take knows the speed it was recorded at, and the take
+  // lasts as long as the edited video, not the source.
+  const rec = await readDb(page, "recordings", id)
+  const segs = rec.cameraSegments as Array<{ startMs: number; endMs: number; cameraMs: number; rate: number }>
+  const at = (t: number) => segs.find((x) => x.startMs <= t && t < x.endMs)
+  expect(at(mid.startMs / 2)?.rate).toBe(1.5)
+  expect(at((mid.startMs + mid.endMs) / 2)?.rate).toBe(3)
+  expect(at((mid.endMs + duration) / 2)?.rate).toBe(1.5)
+  const cameraLen = segs.reduce((s, x) => s + (x.endMs - x.startMs) / x.rate, 0)
+  // Allowing for the moments it takes playback and recording to start and stop.
+  expect(Math.abs(cameraLen - edited)).toBeLessThan(1000)
+
+  // Played back, the screen runs at 3x in the middle clip and the camera at its natural pace.
+  await clickClipAt(1, 0.3)
+  await page.keyboard.press("Space")
+  await expect.poll(() => page.getByTestId("screen-video").evaluate((v: HTMLVideoElement) => v.playbackRate)).toBe(3)
+  await expect.poll(() => page.getByTestId("camera-video").evaluate((v: HTMLVideoElement) => v.playbackRate)).toBeCloseTo(1, 1)
+  await page.keyboard.press("Space")
+
+  // The voice is transcribed at the pace it was spoken, and its words land on the source timeline.
+  await expect.poll(async () => (await readDb(page, "recordings", id)).transcriptStatus, { timeout: 120_000 }).toBe("done")
+  const times = await wordTimes(page)
+  expect(times.length).toBeGreaterThan(3)
+  for (const w of times) {
+    expect(w.start).toBeGreaterThanOrEqual(0)
+    expect(w.start).toBeLessThanOrEqual(duration)
+  }
+  expect(times.map((w) => w.start)).toEqual([...times.map((w) => w.start)].sort((a, b) => a - b))
+
+  // The export is as long as the edited video, with the voice throughout.
+  await page.getByRole("button", { name: "Export", exact: true }).click()
+  const exp = page.getByTestId("export")
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 200_000 }),
+    exp.getByTestId("export-video").click()
+  ])
+  const file = join(downloadsDir, `speed-${download.suggestedFilename()}`)
+  await download.saveAs(file)
+  const info = ffprobe(file)
+  expect(info.streams.some((s) => s.codec_type === "audio")).toBe(true)
+  expect(Math.abs(Number(info.format.duration) * 1000 - edited)).toBeLessThan(150)
+  expect(volumeOf(file, 0.5, edited / 1000 - 0.5)).toBeGreaterThan(-45)
+  await page.keyboard.press("Escape")
+
+  // Undoing the global speed keeps the take; the voice now plays slower with the video.
+  await page.getByRole("button", { name: "Undo" }).click()
+  await expect.poll(async () => (await edits(page)).speed).toBe(1)
+  await expect.poll(async () => Math.abs((await msOf(page, "time-total")) - (duration - midLen / 2))).toBeLessThanOrEqual(1)
+  expect((await readDb(page, "recordings", id)).cameraSegments).toEqual(segs)
+
+  // Exporting now changes the voice's speed (keeping its pitch) to match.
+  const slower = await msOf(page, "time-total")
+  await page.getByRole("button", { name: "Export", exact: true }).click()
+  const [again] = await Promise.all([
+    page.waitForEvent("download", { timeout: 200_000 }),
+    page.getByTestId("export").getByTestId("export-video").click()
+  ])
+  const file2 = join(downloadsDir, `speed2-${again.suggestedFilename()}`)
+  await again.saveAs(file2)
+  expect(Math.abs(Number(ffprobe(file2).format.duration) * 1000 - slower)).toBeLessThan(150)
+  expect(volumeOf(file2, 0.5, slower / 1000 - 0.5)).toBeGreaterThan(-45)
+  await page.keyboard.press("Escape")
+})
+
 test("13. settings: switch model, see what's downloaded, delete a model", async ({ page }) => {
   await page.goto("/settings")
   // Base was downloaded for the transcripts above. Download Tiny here, then delete it.

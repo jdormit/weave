@@ -10,7 +10,7 @@ import { registry } from "./state.ts"
  */
 export const markerAtom = Atom.family((_id: string) => Atom.make(0).pipe(Atom.keepAlive))
 
-type Ctx = Pick<EditorContextValue, "id" | "player" | "cuts" | "recording">
+type Ctx = Pick<EditorContextValue, "id" | "player" | "cuts" | "recording" | "speed">
 
 /** Moves the start marker, and the playhead with it, to a source time. */
 export const moveTo = (c: Ctx, sourceMs: number) => {
@@ -25,8 +25,8 @@ export const moveTo = (c: Ctx, sourceMs: number) => {
 export const moveBy = (c: Ctx, editedDeltaMs: number) => {
   const cuts = normalizeCuts(c.cuts, c.recording.durationMs)
   const from = c.player.current?.playing() ? c.player.current.currentMs() : registry.get(markerAtom(c.id))
-  const edited = Math.max(0, Math.min(editedDuration(cuts, c.recording.durationMs), sourceToEdited(cuts, from) + editedDeltaMs))
-  moveTo(c, editedToSource(cuts, edited))
+  const edited = Math.max(0, Math.min(editedDuration(cuts, c.recording.durationMs, c.speed), sourceToEdited(cuts, from, c.speed) + editedDeltaMs))
+  moveTo(c, editedToSource(cuts, edited, c.speed))
 }
 
 export const jumpToStart = (c: Ctx) => moveTo(c, 0)
@@ -34,7 +34,7 @@ export const jumpToStart = (c: Ctx) => moveTo(c, 0)
 /** The last moment of the edited video. */
 export const jumpToEnd = (c: Ctx) => {
   const cuts = normalizeCuts(c.cuts, c.recording.durationMs)
-  moveTo(c, editedToSource(cuts, Math.max(0, editedDuration(cuts, c.recording.durationMs) - 1)))
+  moveTo(c, editedToSource(cuts, Math.max(0, editedDuration(cuts, c.recording.durationMs, c.speed) - 1), c.speed))
 }
 
 /** Plays from the marker, or stops and goes back to it. */
