@@ -75,8 +75,8 @@ const run = async (job: ExportJob) => {
     const cameraTrack = job.overlay.visible && cameraInput ? await cameraInput.getPrimaryVideoTrack() : null
     // The sound tracks to mix, each with the parts of its file that are kept.
     const audioInputs: Array<{ track: InputAudioTrack; ranges: ReadonlyArray<FileRange> }> = []
-    if (screenAudio) audioInputs.push({ track: screenAudio, ranges: screenRanges(job.cuts, job.durationMs, job.speed) })
-    if (cameraAudio) audioInputs.push({ track: cameraAudio, ranges: cameraRanges(job.cuts, job.durationMs, job, job.speed) })
+    if (screenAudio) audioInputs.push({ track: screenAudio, ranges: screenRanges(job.cuts, job.durationMs, job.speed, job.mutes) })
+    if (cameraAudio) audioInputs.push({ track: cameraAudio, ranges: cameraRanges(job.cuts, job.durationMs, job, job.speed, job.mutes) })
 
     const { width, height } = outputSize(screenTrack.displayWidth, screenTrack.displayHeight, job.resolution)
     const plan = await choosePlan(width, height, audioInputs.length > 0)

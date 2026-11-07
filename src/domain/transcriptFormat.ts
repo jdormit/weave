@@ -122,6 +122,7 @@ export const toJson = (input: {
   readonly words: ReadonlyArray<Word>
   readonly cuts: ReadonlyArray<Cut>
   readonly speed?: SpeedMap
+  readonly mutes?: ReadonlyArray<Cut>
 }): TranscriptExport => {
   const cuts = normalizeCuts(input.cuts, input.durationMs)
   return {
@@ -134,7 +135,8 @@ export const toJson = (input: {
     words: input.words.map((w) => ({ ...w, cut: isWordCut(cuts, w) })),
     cuts,
     speeds: input.speed?.ranges ?? [],
-    speed: input.speed?.global ?? 1
+    speed: input.speed?.global ?? 1,
+    mutes: normalizeCuts(input.mutes ?? [], input.durationMs)
   }
 }
 

@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from "effect"
 import { cameraRateAt, cameraTimeAt, type CameraTiming } from "../domain/camera.ts"
-import { cutAt } from "../domain/editList.ts"
+import { cutAt, isInCut } from "../domain/editList.ts"
 import type { Cut } from "../domain/schema.ts"
 import { normalSpeed, rateAt, type SpeedMap } from "../domain/speed.ts"
 
@@ -14,6 +14,8 @@ export interface PlayerController {
   playRange(fromMs: number, toMs: number): void
   setCuts(cuts: ReadonlyArray<Cut>): void
   setSpeed(speed: SpeedMap): void
+  /** Source ranges to play silently. */
+  setMutes(mutes: ReadonlyArray<Cut>): void
   readonly currentMs: () => number
   /** The speed the video plays at, at the current time. */
   readonly currentRate: () => number
@@ -28,6 +30,7 @@ export interface PlayerController {
 export interface PlayerOptions {
   readonly cuts: ReadonlyArray<Cut>
   readonly speed?: SpeedMap
+  readonly mutes?: ReadonlyArray<Cut>
   readonly timing: CameraTiming
   readonly durationMs: number
 }
@@ -60,6 +63,7 @@ const makeController = (
 ): PlayerController => {
   let cuts = options.cuts
   let speed = options.speed ?? normalSpeed
+  let mutes = options.mutes ?? []
   let stopAt: number | null = null
   let destroyed = false
   const timeListeners = new Set<(ms: number) => void>()
@@ -78,6 +82,20 @@ const makeController = (
     // its natural pace when the video plays at that speed again.
     const camRate = rate / cameraRateAt(options.timing, now())
     if (camera.playbackRate !== camRate) camera.playbackRate = camRate
+  }
+
+  /**
+   * Silences both videos inside a muted clip. This uses volume, not the muted
+   * property, which the editor keeps for muting the screen's sound as a whole.
+   * It looks a little ahead so a muted clip isn't heard for a moment after a
+   * clip boundary.
+   */
+  const syncVolume = () => {
+    const t = now()
+    const silent = isInCut(mutes, t) || (!screen.paused && isInCut(mutes, t + LOOKAHEAD_MS * screen.playbackRate))
+    const volume = silent ? 0 : 1
+    if (screen.volume !== volume) screen.volume = volume
+    if (camera && camera.volume !== volume) camera.volume = volume
   }
 
   const syncCamera = (force = false) => {
@@ -122,7 +140,10 @@ const makeController = (
   // Check for cuts on every presented frame.
   const onFrame = () => {
     if (destroyed) return
-    if (!screen.paused) skipCuts()
+    if (!screen.paused) {
+      skipCuts()
+      syncVolume()
+    }
     if ("requestVideoFrameCallback" in screen) screen.requestVideoFrameCallback(onFrame)
   }
   if ("requestVideoFrameCallback" in screen) screen.requestVideoFrameCallback(onFrame)
@@ -134,6 +155,7 @@ const makeController = (
     if (!screen.paused) {
       skipCuts()
       syncRate()
+      syncVolume()
       syncCamera()
       emit()
     }
@@ -153,6 +175,7 @@ const makeController = (
   }
   const onSeeked = () => {
     syncRate()
+    syncVolume()
     syncCamera(true)
     emit()
   }
@@ -168,6 +191,7 @@ const makeController = (
       if (t >= options.durationMs - 50) screen.currentTime = 0
       skipCuts()
       syncRate()
+      syncVolume()
       void screen.play().catch(() => {})
     },
     pause: () => {
@@ -186,6 +210,7 @@ const makeController = (
       screen.currentTime = from / 1000
       stopAt = to
       syncRate()
+      syncVolume()
       syncCamera(true)
       void screen.play().catch(() => {})
     },
@@ -195,6 +220,10 @@ const makeController = (
     setSpeed: (next) => {
       speed = next
       syncRate()
+    },
+    setMutes: (next) => {
+      mutes = next
+      syncVolume()
     },
     currentMs: now,
     currentRate: () => rateAt(speed, now()),

@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react"
 import { Effect, Option } from "effect"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { addCut, addSplit, editedDuration, isWordCut, toggleWords } from "../../domain/editList.ts"
+import { addCut, addSplit, clips, editedDuration, isWordCut, setMuted, toggleWords } from "../../domain/editList.ts"
 import { RecordingStore } from "../../services/RecordingStore.ts"
 import type { PlayerController } from "../../services/Player.ts"
 import { run } from "../../services/runtime.ts"
@@ -109,6 +109,7 @@ export const Editor = ({ id }: { id: string }) => {
           splits: edits.splits,
           speeds: edits.speeds,
           speed: { ranges: edits.speeds, global: edits.speed },
+          mutes: edits.mutes,
           player,
           screenUrl: media.screenUrl,
           cameraUrl: media.cameraUrl,
@@ -151,6 +152,9 @@ export const Editor = ({ id }: { id: string }) => {
     } else if (key === "s" || key === "S") {
       e.preventDefault()
       splitAtPlayhead(c)
+    } else if (key === "m" || key === "M") {
+      e.preventDefault()
+      toggleMuteSelected(c)
     } else if (key === "+" || key === "=") {
       registry.update(zoomAtom(id), (z) => Math.min(64, z * 1.5))
     } else if (key === "-" || key === "_") {
@@ -329,6 +333,21 @@ export const deleteSelection = (c: EditorContextValue) => {
   }
 }
 
+/** Mutes the selected clip, or unmutes it if it's muted. */
+export const toggleMuteSelected = (c: EditorContextValue) => {
+  const sel = registry.get(selectedClipAtom(c.id))
+  if (!sel) return
+  const clip = clips(c.cuts, c.splits, c.recording.durationMs, c.speeds, c.mutes).find((k) => k.startMs === sel.startMs && k.endMs === sel.endMs)
+  if (!clip) return
+  applyEdit(c.id, (s) => ({ ...s, mutes: setMuted(s.mutes, clip.startMs, clip.endMs, !clip.muted, c.recording.durationMs) }))
+  // Muting next to a muted neighbor merges the two, so keep whichever clip now holds this one.
+  const next = registry.get(editsAtom(c.id))
+  if (!next) return
+  const mid = (clip.startMs + clip.endMs) / 2
+  const now = clips(next.cuts, next.splits, c.recording.durationMs, next.speeds, next.mutes).find((k) => mid >= k.startMs && mid < k.endMs)
+  registry.set(selectedClipAtom(c.id), now ? { startMs: now.startMs, endMs: now.endMs } : null)
+}
+
 export const splitAtPlayhead = (c: EditorContextValue) => {
   const t = registry.get(playheadAtom(c.id))
   if (t <= 0 || t >= c.recording.durationMs) return
@@ -352,6 +371,7 @@ const SHORTCUTS: ReadonlyArray<[string, ReadonlyArray<string>]> = [
   ["Cut or restore selected words", ["Delete"]],
   ["Delete the selected clip", ["Delete"]],
   ["Split at the playhead", ["S"]],
+  ["Mute or unmute the selected clip", ["M"]],
   ["Undo", ["Ctrl", "Z"]],
   ["Redo", ["Ctrl", "Shift", "Z"]],
   ["Zoom the timeline in or out", ["+", "−"]],

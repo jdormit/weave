@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { clips as makeClips, editedDuration, editedToSource, sourceToEdited, totalCutMs, trimClip, type Clip } from "../../domain/editList.ts"
+import { clips as makeClips, editedDuration, editedToSource, setMuted, sourceToEdited, totalCutMs, trimClip, type Clip } from "../../domain/editList.ts"
 import { normalizeCuts } from "../../domain/editList.ts"
 import { CLIP_SPEEDS, formatRate, isNormal, setSpeed } from "../../domain/speed.ts"
 import { formatClock } from "../../domain/transcriptFormat.ts"
@@ -9,7 +9,7 @@ import { filmstrip, peaks, TRANSCRIBE_RATE } from "../../services/media.ts"
 import { playheadAtom, selectedClipAtom, selectionAtom, useEditor, zoomAtom } from "../editorState.ts"
 import { markerAtom, moveTo } from "../transport.ts"
 import { Icon } from "../Icon.tsx"
-import { deleteSelection, splitAtPlayhead } from "../screens/Editor.tsx"
+import { deleteSelection, splitAtPlayhead, toggleMuteSelected } from "../screens/Editor.tsx"
 import { applyEdit, registry } from "../state.ts"
 
 const FRAME_H = 56
@@ -74,7 +74,7 @@ export const Timeline = () => {
 
   const pxPerMs = (Math.max(200, width - 2) * zoom) / Math.max(1, edited)
   const innerWidth = Math.max(width, edited * pxPerMs)
-  const clipList = useMemo(() => makeClips(cuts, c.splits, duration, c.speeds), [cuts, c.splits, duration, c.speeds])
+  const clipList = useMemo(() => makeClips(cuts, c.splits, duration, c.speeds, c.mutes), [cuts, c.splits, duration, c.speeds, c.mutes])
   const selected = selectedClip ? clipList.find((k) => k.startMs === selectedClip.startMs && k.endMs === selectedClip.endMs) ?? null : null
 
   // Keep the playhead in view while playing.
@@ -154,6 +154,16 @@ export const Timeline = () => {
             applyEdit(c.id, (s) => ({ ...s, speeds: setSpeed(s.speeds, selected.startMs, selected.endMs, rate) }))
           }}
         />
+        <button
+          className="btn ghost"
+          disabled={!selected}
+          aria-pressed={selected?.muted ?? false}
+          onClick={() => toggleMuteSelected(c)}
+          data-testid="mute-clip"
+          title={selected ? (selected.muted ? "Bring back the selected clip's sound" : "Silence the selected clip, including any voiceover") : "Select a clip to mute it"}
+        >
+          <Icon name={selected?.muted ? "sound" : "muted"} />{selected?.muted ? "Unmute clip" : "Mute clip"} <kbd>M</kbd>
+        </button>
         <span className="vsep" />
         <button className="iconbtn" aria-label="Zoom out" disabled={zoom <= 1} onClick={() => registry.update(zoomAtom(c.id), (z) => Math.max(1, z / 1.5))}>
           <Icon name="minus" />
@@ -283,12 +293,13 @@ const ClipView = ({
       if (Math.abs(deltaMs) < 1) return
       const target = edge === "start" ? clip.startMs + deltaMs : clip.endMs + deltaMs
       const bounded = boundTrim(c.cuts, c.splits, clip, edge, target, c.recording.durationMs)
-      // Part brought back by moving an edge outward gets the clip's speed.
+      // Part brought back by moving an edge outward gets the clip's speed and muting.
       const grown = edge === "start" ? (bounded < clip.startMs ? [bounded, clip.startMs] : null) : (bounded > clip.endMs ? [clip.endMs, bounded] : null)
       applyEdit(c.id, (s) => ({
         ...s,
         cuts: trimClip(s.cuts, clip, edge, bounded, c.recording.durationMs),
-        speeds: grown && clip.rate !== 1 ? setSpeed(s.speeds, grown[0]!, grown[1]!, clip.rate) : s.speeds
+        speeds: grown && clip.rate !== 1 ? setSpeed(s.speeds, grown[0]!, grown[1]!, clip.rate) : s.speeds,
+        mutes: grown ? setMuted(s.mutes, grown[0]!, grown[1]!, clip.muted, c.recording.durationMs) : s.mutes
       }))
       registry.set(selectedClipAtom(c.id), null)
     }
@@ -300,17 +311,23 @@ const ClipView = ({
   const shiftR = dragPx?.edge === "end" ? dragPx.px : 0
   return (
     <div
-      className={`clip${selected ? " on" : ""}`}
+      className={`clip${selected ? " on" : ""}${clip.muted ? " muted" : ""}`}
       data-testid="clip"
       data-start={clip.startMs}
       data-end={clip.endMs}
       data-rate={clip.rate}
+      data-muted={clip.muted}
       style={{ left: left + shiftL, width: Math.max(MIN_CLIP_PX, width - shiftL + shiftR) }}
       onMouseDown={(e) => {
         if (e.button === 0) onSelect(e.clientX)
       }}
     >
-      {clip.rate !== 1 && <span className="rate" data-testid="clip-rate">{formatRate(clip.rate)}</span>}
+      {(clip.rate !== 1 || clip.muted) && (
+        <span className="badges">
+          {clip.rate !== 1 && <span className="rate" data-testid="clip-rate">{formatRate(clip.rate)}</span>}
+          {clip.muted && <span className="mutebadge" data-testid="clip-muted" title="Muted"><Icon name="muted" /></span>}
+        </span>
+      )}
       <div className="film" aria-hidden="true">
         {tiles.map((u, j) => (u ? <img key={j} src={u} alt="" style={{ width: frameW }} /> : <i key={j} style={{ width: frameW }} />))}
       </div>

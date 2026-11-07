@@ -111,3 +111,25 @@ describe("speed", () => {
     expect(cameraRanges([], 3000, timing, { ...speed, global: 2 })).toEqual([{ fromMs: 0, toMs: 500, outMs: 500, outEndMs: 750 }])
   })
 })
+
+describe("muted clips", () => {
+  test("a muted range leaves a silent gap in the screen's sound, after cuts and speeds", () => {
+    const speed = { ranges: [{ startMs: 2000, endMs: 3000, rate: 2 }], global: 1 }
+    // Cut 500-1000, mute 1500-2500 (half normal speed, half 2x).
+    expect(screenRanges([{ startMs: 500, endMs: 1000 }], 4000, speed, [{ startMs: 1500, endMs: 2500 }])).toEqual([
+      { fromMs: 0, toMs: 500, outMs: 0, outEndMs: 500 },
+      { fromMs: 1000, toMs: 1500, outMs: 500, outEndMs: 1000 },
+      { fromMs: 2500, toMs: 3000, outMs: 1750, outEndMs: 2000 },
+      { fromMs: 3000, toMs: 4000, outMs: 2000, outEndMs: 3000 }
+    ])
+  })
+  test("muting a clip silences a voiceover recorded over it, at the take's speed", () => {
+    const speed = { ranges: [{ startMs: 1000, endMs: 3000, rate: 2 }], global: 1 }
+    // A voiceover recorded while 1000-3000 played at 2x: 1000 ms of camera.
+    const timing = { cameraOffsetMs: 0, cameraSegments: [{ startMs: 1000, endMs: 3000, cameraMs: 0, rate: 2 }] }
+    expect(cameraRanges([], 4000, timing, speed, [{ startMs: 2000, endMs: 3000 }])).toEqual([
+      { fromMs: 0, toMs: 500, outMs: 1000, outEndMs: 1500 }
+    ])
+    expect(cameraRanges([], 4000, timing, speed, [])).toEqual([{ fromMs: 0, toMs: 1000, outMs: 1000, outEndMs: 2000 }])
+  })
+})
