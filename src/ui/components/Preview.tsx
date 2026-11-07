@@ -57,6 +57,7 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
         return yield* (yield* Player).attach(screen, camera, {
           cuts: c.cuts,
           speed: c.speed,
+          mutes: c.mutes,
           timing: c.recording,
           durationMs: c.recording.durationMs
         })
@@ -92,13 +93,16 @@ export const Preview = ({ style }: { style?: CSSProperties }) => {
     if (liveRef.current) liveRef.current.srcObject = take?.camera ?? null
   }, [take?.camera])
 
-  // Keep the player's cuts and speeds current.
+  // Keep the player's cuts, speeds and mutes current.
   useEffect(() => {
     c.player.current?.setCuts(c.cuts)
   }, [c.cuts, c.player.current])
   useEffect(() => {
     c.player.current?.setSpeed(c.speed)
   }, [c.speed, c.player.current])
+  useEffect(() => {
+    c.player.current?.setMutes(c.mutes)
+  }, [c.mutes, c.player.current])
 
   const total = editedDuration(c.cuts, c.recording.durationMs, c.speed)
   const now = Math.min(total, sourceToEdited(c.cuts, playhead, c.speed))

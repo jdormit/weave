@@ -3,6 +3,7 @@ import { setSpeed } from "./speed.ts"
 import {
   addCut,
   addSplit,
+  audiblePieces,
   clips,
   commit,
   editedDuration,
@@ -10,6 +11,8 @@ import {
   emptyEditList,
   isWordCut,
   keptSegments,
+  outputPieces,
+  setMuted,
   normalizeCuts,
   redo,
   removeCut,
@@ -115,8 +118,8 @@ describe("segments and clips", () => {
 describe("history", () => {
   test("undo and redo", () => {
     let list = emptyEditList("r")
-    list = commit(list, { cuts: [{ startMs: 0, endMs: 10 }], splits: [], speeds: [], speed: 1 })
-    list = commit(list, { cuts: [{ startMs: 0, endMs: 20 }], splits: [5], speeds: [], speed: 1 })
+    list = commit(list, { cuts: [{ startMs: 0, endMs: 10 }], splits: [], speeds: [], speed: 1, mutes: [] })
+    list = commit(list, { cuts: [{ startMs: 0, endMs: 20 }], splits: [5], speeds: [], speed: 1, mutes: [] })
     expect(list.past.length).toBe(2)
     list = undo(list)
     expect(list.cuts).toEqual([{ startMs: 0, endMs: 10 }])
@@ -132,12 +135,12 @@ describe("history", () => {
   })
   test("a change that alters nothing adds no step", () => {
     const list = emptyEditList("r")
-    expect(commit(list, { cuts: [], splits: [], speeds: [], speed: 1 }).past.length).toBe(0)
+    expect(commit(list, { cuts: [], splits: [], speeds: [], speed: 1, mutes: [] }).past.length).toBe(0)
   })
   test("a new change clears redo", () => {
-    let list = commit(emptyEditList("r"), { cuts: [{ startMs: 0, endMs: 10 }], splits: [], speeds: [], speed: 1 })
+    let list = commit(emptyEditList("r"), { cuts: [{ startMs: 0, endMs: 10 }], splits: [], speeds: [], speed: 1, mutes: [] })
     list = undo(list)
-    list = commit(list, { cuts: [], splits: [3], speeds: [], speed: 1 })
+    list = commit(list, { cuts: [], splits: [3], speeds: [], speed: 1, mutes: [] })
     expect(list.future).toEqual([])
   })
 })
@@ -232,12 +235,44 @@ describe("speed", () => {
   })
   test("speed changes are undoable", () => {
     let list = emptyEditList("r")
-    list = commit(list, { cuts: [], splits: [], speeds: [{ startMs: 0, endMs: 10, rate: 2 }], speed: 1 })
+    list = commit(list, { cuts: [], splits: [], speeds: [{ startMs: 0, endMs: 10, rate: 2 }], speed: 1, mutes: [] })
     list = commit(list, { ...list, speed: 1.5 })
     list = undo(list)
     expect(list.speed).toBe(1)
     expect(list.speeds).toHaveLength(1)
     list = undo(list)
     expect(list.speeds).toEqual([])
+  })
+})
+
+describe("muting", () => {
+  test("muting and unmuting ranges merges and splits them like cuts", () => {
+    let m = setMuted([], 1000, 2000, true)
+    m = setMuted(m, 2000, 3000, true)
+    expect(m).toEqual([{ startMs: 1000, endMs: 3000 }])
+    expect(setMuted(m, 1500, 2500, false)).toEqual([{ startMs: 1000, endMs: 1500 }, { startMs: 2500, endMs: 3000 }])
+  })
+  test("clips divide where muting changes and say whether they're muted", () => {
+    const list = clips([], [], 3000, [], [{ startMs: 1000, endMs: 2000 }])
+    expect(list.map((c) => [c.startMs, c.endMs, c.muted])).toEqual([[0, 1000, false], [1000, 2000, true], [2000, 3000, false]])
+  })
+  test("a split inside a muted range leaves both halves muted", () => {
+    const list = clips([], [1500], 3000, [], [{ startMs: 1000, endMs: 2000 }])
+    expect(list.filter((c) => c.muted).map((c) => [c.startMs, c.endMs])).toEqual([[1000, 1500], [1500, 2000]])
+  })
+  test("audible pieces leave out muted source time and keep their place on the edited timeline", () => {
+    const pieces = outputPieces([], 3000, { ranges: [{ startMs: 0, endMs: 2000, rate: 2 }], global: 1 })
+    expect(audiblePieces(pieces, [{ startMs: 500, endMs: 1000 }])).toEqual([
+      { startMs: 0, endMs: 500, rate: 2, outMs: 0, outLenMs: 250 },
+      { startMs: 1000, endMs: 2000, rate: 2, outMs: 500, outLenMs: 500 },
+      { startMs: 2000, endMs: 3000, rate: 1, outMs: 1000, outLenMs: 1000 }
+    ])
+  })
+  test("muting is one undoable step", () => {
+    let list = emptyEditList("r")
+    list = commit(list, { ...list, mutes: [{ startMs: 0, endMs: 10 }] })
+    expect(list.mutes).toEqual([{ startMs: 0, endMs: 10 }])
+    expect(undo(list).mutes).toEqual([])
+    expect(commit(list, { ...list }).past.length).toBe(1)
   })
 })

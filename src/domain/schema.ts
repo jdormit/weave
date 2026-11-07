@@ -111,11 +111,14 @@ export const SpeedRange = Schema.Struct({
 })
 export type SpeedRange = typeof SpeedRange.Type
 
+/** Clip edits besides cuts and splits. */
 const speedFields = {
   /** Clip speeds, by source range. Edits saved before speeds existed decode as none. */
   speeds: Schema.Array(SpeedRange).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
   /** The whole video's speed, which multiplies each clip's speed. */
-  speed: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(1)))
+  speed: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(1))),
+  /** Source ranges whose sound is left out. Edits saved before muting existed decode as none. */
+  mutes: Schema.Array(Cut).pipe(Schema.withDecodingDefaultKey(Effect.succeed([])))
 }
 
 export const EditState = Schema.Struct({

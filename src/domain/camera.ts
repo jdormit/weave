@@ -1,4 +1,4 @@
-import { outputPieces } from "./editList.ts"
+import { audiblePieces, outputPieces, type Segment } from "./editList.ts"
 import type { CameraSegment, Cut, Recording } from "./schema.ts"
 import type { SpeedMap } from "./speed.ts"
 
@@ -62,15 +62,25 @@ export interface FileRange {
   readonly outEndMs: number
 }
 
-/** The parts of the screen file that are kept, and where each lands in the edited output. */
-export const screenRanges = (cuts: ReadonlyArray<Cut>, durationMs: number, speed?: SpeedMap): Array<FileRange> =>
-  outputPieces(cuts, durationMs, speed).map((p) => ({ fromMs: p.startMs, toMs: p.endMs, outMs: p.outMs, outEndMs: p.outMs + p.outLenMs }))
+/** The parts of the screen file's sound that are kept and not muted, and where each lands in the edited output. */
+export const screenRanges = (cuts: ReadonlyArray<Cut>, durationMs: number, speed?: SpeedMap, mutes: ReadonlyArray<Segment> = []): Array<FileRange> =>
+  audiblePieces(outputPieces(cuts, durationMs, speed), mutes).map((p) => ({ fromMs: p.startMs, toMs: p.endMs, outMs: p.outMs, outEndMs: p.outMs + p.outLenMs }))
 
-/** The parts of the camera file that are kept, and where each lands in the edited output. */
-export const cameraRanges = (cuts: ReadonlyArray<Cut>, durationMs: number, timing: CameraTiming, speed?: SpeedMap): Array<FileRange> => {
+/**
+ * The parts of the camera file that are kept, and where each lands in the
+ * edited output. With mutes, muted source ranges are left out, which is how a
+ * voiceover is silenced along with the clip it plays over.
+ */
+export const cameraRanges = (
+  cuts: ReadonlyArray<Cut>,
+  durationMs: number,
+  timing: CameraTiming,
+  speed?: SpeedMap,
+  mutes: ReadonlyArray<Segment> = []
+): Array<FileRange> => {
   const segs = effectiveSegments(timing, durationMs)
   const out: Array<FileRange> = []
-  for (const p of outputPieces(cuts, durationMs, speed)) {
+  for (const p of audiblePieces(outputPieces(cuts, durationMs, speed), mutes)) {
     for (const s of segs) {
       const a = Math.max(p.startMs, s.startMs)
       const b = Math.min(p.endMs, s.endMs)

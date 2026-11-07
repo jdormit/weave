@@ -17,6 +17,7 @@ export const emptyEditList = (recordingId: string): EditList => ({
   splits: [],
   speeds: [],
   speed: 1,
+  mutes: [],
   past: [],
   future: []
 })
@@ -168,22 +169,28 @@ export interface Clip extends Segment {
   readonly index: number
   /** The clip's own speed, without the global speed. */
   readonly rate: number
+  /** The clip's sound is left out. */
+  readonly muted: boolean
 }
 
 /**
- * Kept segments further divided at the splits, and where the clip speed
- * changes. These are the clips on the timeline.
+ * Kept segments further divided at the splits, and where the clip speed or
+ * muting changes. These are the clips on the timeline.
  */
 export const clips = (
   cuts: ReadonlyArray<Cut>,
   splits: ReadonlyArray<number>,
   durationMs: number,
-  speeds: SpeedMap["ranges"] = []
+  speeds: SpeedMap["ranges"] = [],
+  mutes: ReadonlyArray<Segment> = []
 ): Array<Clip> => {
-  const bounds = [...splits, ...speeds.flatMap((r) => [r.startMs, r.endMs])].sort((a, b) => a - b)
+  const bounds = [...splits, ...speeds.flatMap((r) => [r.startMs, r.endMs]), ...mutes.flatMap((m) => [m.startMs, m.endMs])]
+    .sort((a, b) => a - b)
   const out: Array<Clip> = []
-  const push = (startMs: number, endMs: number) =>
-    out.push({ startMs, endMs, index: out.length, rate: clipRateAt(speeds, (startMs + endMs) / 2) })
+  const push = (startMs: number, endMs: number) => {
+    const mid = (startMs + endMs) / 2
+    out.push({ startMs, endMs, index: out.length, rate: clipRateAt(speeds, mid), muted: isInCut(mutes, mid) })
+  }
   for (const seg of keptSegments(cuts, durationMs)) {
     let start = seg.startMs
     for (const s of bounds) {
@@ -197,13 +204,51 @@ export const clips = (
   return out
 }
 
+// ---------------------------------------------------------------------------
+// Muting
+
+/**
+ * Mutes or unmutes the source range [startMs, endMs). Muted ranges are kept
+ * like cuts (sorted and merged), so they survive splits and trims. Muting
+ * leaves out every sound in the range: the screen's own and any voiceover.
+ */
+export const setMuted = (
+  mutes: ReadonlyArray<Segment>,
+  startMs: number,
+  endMs: number,
+  muted: boolean,
+  durationMs = Infinity
+): Array<Segment> => (muted ? addCut(mutes, startMs, endMs, durationMs) : removeCut(mutes, startMs, endMs))
+
+/** The parts of the output pieces that are not muted, placed on the edited timeline. */
+export const audiblePieces = (pieces: ReadonlyArray<OutputPiece>, mutes: ReadonlyArray<Segment>): Array<OutputPiece> => {
+  if (mutes.length === 0) return [...pieces]
+  const sorted = normalizeCuts(mutes)
+  const out: Array<OutputPiece> = []
+  const push = (p: OutputPiece, a: number, b: number) => {
+    if (b - a < MIN_CUT_MS) return
+    out.push({ startMs: a, endMs: b, rate: p.rate, outMs: p.outMs + (a - p.startMs) / p.rate, outLenMs: (b - a) / p.rate })
+  }
+  for (const p of pieces) {
+    let cursor = p.startMs
+    for (const m of sorted) {
+      if (m.endMs <= cursor) continue
+      if (m.startMs >= p.endMs) break
+      if (m.startMs > cursor) push(p, cursor, m.startMs)
+      cursor = Math.max(cursor, m.endMs)
+    }
+    if (cursor < p.endMs) push(p, cursor, p.endMs)
+  }
+  return out
+}
+
 export const addSplit = (splits: ReadonlyArray<number>, t: number): Array<number> =>
   splits.some((s) => Math.abs(s - t) < 1) ? [...splits] : [...splits, t].sort((a, b) => a - b)
 
 // ---------------------------------------------------------------------------
 // History
 
-const snapshot = (list: EditList): EditState => ({ cuts: list.cuts, splits: list.splits, speeds: list.speeds, speed: list.speed })
+const snapshot = (list: EditList): EditState => ({ cuts: list.cuts, splits: list.splits, speeds: list.speeds, speed: list.speed, mutes: list.mutes })
 
 /** Applies a change as one undoable step. A change that alters nothing adds no history. */
 export const commit = (list: EditList, next: EditState): EditList => {
@@ -239,7 +284,11 @@ export const redo = (list: EditList): EditList => {
   }
 }
 
+const sameRanges = (a: ReadonlyArray<Segment>, b: ReadonlyArray<Segment>): boolean =>
+  a.length === b.length && a.every((r, i) => r.startMs === b[i]!.startMs && r.endMs === b[i]!.endMs)
+
 const sameState = (a: EditState, b: EditState): boolean =>
+  sameRanges(a.mutes, b.mutes) &&
   a.cuts.length === b.cuts.length &&
   a.splits.length === b.splits.length &&
   a.cuts.every((c, i) => c.startMs === b.cuts[i]!.startMs && c.endMs === b.cuts[i]!.endMs) &&
