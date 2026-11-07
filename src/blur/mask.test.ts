@@ -48,6 +48,12 @@ describe("confidenceToMask", () => {
 })
 
 test("blurRadius scales with width and has a floor", () => {
-  expect(blurRadius(1280)).toBe(21)
-  expect(blurRadius(100)).toBe(4)
+  expect(blurRadius(1280, "strong")).toBe(21)
+  expect(blurRadius(100, "strong")).toBe(4)
+})
+
+test("a light blur is much smaller than a strong one", () => {
+  expect(blurRadius(1280, "light")).toBe(6)
+  expect(blurRadius(1280, "strong")).toBe(21)
+  expect(blurRadius(100, "light")).toBe(2)
 })

@@ -3,6 +3,7 @@
  * worker and draws the blurred result onto a canvas laid over the video.
  */
 import { createCompositor } from "./compose.ts"
+import type { BlurStrength } from "./mask.ts"
 
 export interface BlurRequest {
   readonly id: number
@@ -45,7 +46,7 @@ const hasFrameCallback = typeof HTMLVideoElement !== "undefined" && "requestVide
  * returned function is called. Sets data-ready="true" on the canvas once a
  * masked frame is drawn.
  */
-export const attachBlur = (video: HTMLVideoElement, canvas: HTMLCanvasElement): (() => void) => {
+export const attachBlur = (video: HTMLVideoElement, canvas: HTMLCanvasElement, strength: BlurStrength): (() => void) => {
   const v = video
   const ctx = canvas.getContext("2d")
   if (!ctx) return () => {}
@@ -64,7 +65,7 @@ export const attachBlur = (video: HTMLVideoElement, canvas: HTMLCanvasElement): 
       canvas.width = w
       canvas.height = h
     }
-    compositor.draw(v, mask, ctx, w, h)
+    compositor.draw(v, mask, ctx, w, h, strength)
     if (mask) canvas.dataset["ready"] = "true"
   }
 

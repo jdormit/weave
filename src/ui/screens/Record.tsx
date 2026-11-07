@@ -200,9 +200,26 @@ const Setup = ({ starting }: { starting: boolean }) => {
                   <span>
                     <b style={{ fontWeight: 550 }}>Blur background</b>
                     <br />
-                    <span className="muted" style={{ fontSize: 13 }}>Done on this device. You can turn it off after recording.</span>
+                    <span className="muted" style={{ fontSize: 13 }}>Done on this device. You can change it after recording.</span>
                   </span>
                 </label>
+              )}
+              {settings.cameraId !== "none" && settings.blurBackground && (
+                <div className="seg" role="radiogroup" aria-label="Blur strength" style={{ marginTop: -8, marginLeft: 30, alignSelf: "flex-start" }}>
+                  {(["light", "strong"] as const).map((s) => (
+                    <label key={s} className={settings.blurStrength === s ? "on" : ""}>
+                      <input
+                        className="sr"
+                        type="radio"
+                        name="blur-strength"
+                        value={s}
+                        checked={settings.blurStrength === s}
+                        onChange={() => updateSettings((x) => ({ ...x, blurStrength: s }))}
+                      />
+                      {s === "light" ? "Light" : "Strong"}
+                    </label>
+                  ))}
+                </div>
               )}
               <div className="field">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -248,7 +265,7 @@ const Setup = ({ starting }: { starting: boolean }) => {
               {settings.cameraId === "none"
                 ? <span className="muted">No camera</span>
                 : (
-                  <BlurredVideo videoRef={videoRef} blur={settings.blurBackground}>
+                  <BlurredVideo videoRef={videoRef} blur={settings.blurBackground ? settings.blurStrength : null}>
                     <video ref={videoRef} autoPlay muted playsInline data-testid="camera-preview" />
                   </BlurredVideo>
                 )}

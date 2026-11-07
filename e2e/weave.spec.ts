@@ -398,7 +398,7 @@ const bubbleBox = (overlay: { x: number; y: number; size: number; shape: string 
 }
 
 /** Counts sharp edges (big jumps between neighboring pixels) in a grayscale crop of a frame. */
-const sharpEdges = (file: string, atSec: number, x: number, y: number, width: number, height: number) => {
+const sharpEdges = (file: string, atSec: number, x: number, y: number, width: number, height: number, jump = 15) => {
   const w = 2 * Math.floor(width / 2)
   const h = 2 * Math.floor(height / 2)
   const raw = execFileSync("ffmpeg", [
@@ -407,7 +407,7 @@ const sharpEdges = (file: string, atSec: number, x: number, y: number, width: nu
   ])
   let n = 0
   for (let r = 0; r < h; r++) {
-    for (let c = 1; c < w; c++) if (Math.abs(raw[r * w + c]! - raw[r * w + c - 1]!) > 15) n++
+    for (let c = 1; c < w; c++) if (Math.abs(raw[r * w + c]! - raw[r * w + c - 1]!) > jump) n++
   }
   return n
 }
@@ -458,40 +458,56 @@ test("9. exports an MP4 with the edits and the camera overlay", async ({ page })
   expect(camera.suggestedFilename()).toMatch(/\.webm$/)
 })
 
-test("9b. blurs the camera background in the preview and the export", async ({ page }) => {
+test("9b. blurs the camera background, light or strong, in the preview and the export", async ({ page }) => {
   await page.keyboard.press("Escape")
   await expect(page.getByTestId("export")).toHaveCount(0)
   const bubble = page.getByTestId("bubble")
-  await bubble.click()
-  const blurButton = page.getByRole("group", { name: "Camera shape" }).getByRole("button", { name: "Blur background" })
-  await expect(blurButton).toHaveAttribute("aria-pressed", "false")
-  await blurButton.click()
-  await expect(blurButton).toHaveAttribute("aria-pressed", "true")
-  await expect.poll(async () => (await readDb(page, "recordings", id)).overlay.blur).toBe(true)
-  // The model runs and the preview shows the blurred camera.
-  await expect(bubble.locator("[data-testid=blur-canvas][data-ready=true]")).toBeAttached({ timeout: 30_000 })
-
-  const overlay = (await readDb(page, "recordings", id)).overlay
-  await page.getByRole("button", { name: "Export", exact: true }).click()
+  const bar = page.getByRole("group", { name: "Camera shape" })
   const dialog = page.getByTestId("export")
-  const [download] = await Promise.all([
-    page.waitForEvent("download", { timeout: 200_000 }),
-    dialog.getByTestId("export-video").click()
-  ])
-  expect(await download.failure()).toBeNull()
-  const file = join(downloadsDir, `blurred-${download.suggestedFilename()}`)
-  await download.saveAs(file)
-  const video = ffprobe(file).streams.find((s) => s.codec_type === "video")!
-  const { cx, cy, bw, bh } = bubbleBox(overlay, video.width!, video.height!)
-  // Chromium's fake camera has no person in it: it stays green, and the
-  // timestamp text along its top edge, which is never taken for a person, loses its sharp edges.
-  const cam = pixel(file, 1, cx, cy - bh * 0.3)
-  expect(cam.g).toBeGreaterThan(cam.r + 25)
-  const textStrip = [cx - bw * 0.45, cy - bh * 0.48, bw * 0.5, bh * 0.1] as const
-  const sharp = sharpEdges(sharpExport, 1, ...textStrip)
-  const blurred = sharpEdges(file, 1, ...textStrip)
-  expect(sharp).toBeGreaterThan(150)
-  expect(blurred).toBeLessThan(sharp * 0.1)
+
+  /** Picks a blur level on the bubble, waits for the blurred preview, exports, and counts sharp edges in the camera's timestamp text. */
+  const exportWith = async (choice: "Light blur" | "Strong blur", strength: "light" | "strong") => {
+    await bubble.click()
+    await bar.getByRole("button", { name: choice }).click()
+    await expect(bar.getByRole("button", { name: choice })).toHaveAttribute("aria-pressed", "true")
+    await expect(bar.getByRole("button", { name: "No blur" })).toHaveAttribute("aria-pressed", "false")
+    await expect.poll(async () => (await readDb(page, "recordings", id)).overlay).toMatchObject({ blur: true, blurStrength: strength })
+    // The model runs and the preview shows the blurred camera.
+    await expect(bubble.locator(`[data-testid=blur-canvas][data-strength=${strength}][data-ready=true]`)).toBeAttached({ timeout: 30_000 })
+
+    const overlay = (await readDb(page, "recordings", id)).overlay
+    await page.getByRole("button", { name: "Export", exact: true }).click()
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 200_000 }),
+      dialog.getByTestId("export-video").click()
+    ])
+    expect(await download.failure()).toBeNull()
+    const file = join(downloadsDir, `${strength}-${download.suggestedFilename()}`)
+    await download.saveAs(file)
+    const video = ffprobe(file).streams.find((s) => s.codec_type === "video")!
+    const { cx, cy, bw, bh } = bubbleBox(overlay, video.width!, video.height!)
+    // Chromium's fake camera has no person in it: it stays green, and the
+    // timestamp text along its top edge, which is never taken for a person, loses its sharp edges.
+    const cam = pixel(file, 1, cx, cy - bh * 0.3)
+    expect(cam.g).toBeGreaterThan(cam.r + 25)
+    const textStrip = [cx - bw * 0.45, cy - bh * 0.48, bw * 0.5, bh * 0.1] as const
+    return {
+      sharp: sharpEdges(sharpExport, 1, ...textStrip),
+      blurred: sharpEdges(file, 1, ...textStrip),
+      // Faint edges: a light blur keeps some, a strong one almost none.
+      faint: sharpEdges(file, 1, ...textStrip, 3)
+    }
+  }
+
+  const light = await exportWith("Light blur", "light")
+  await page.keyboard.press("Escape")
+  await expect(dialog).toHaveCount(0)
+  const strong = await exportWith("Strong blur", "strong")
+  expect(light.sharp).toBeGreaterThan(150)
+  // Both blur the text; the strong blur leaves fewer faint edges.
+  expect(light.blurred).toBeLessThan(light.sharp * 0.6)
+  expect(strong.blurred).toBeLessThan(strong.sharp * 0.1)
+  expect(strong.faint * 2).toBeLessThan(light.faint)
   // The export dialog stays open for the transcript exports.
 })
 
@@ -560,6 +576,7 @@ test("12. Cancel saves nothing; Restart keeps only the second take, with the bac
   await setUpRecord(page)
   // Blur, shown live in the preview before and during recording.
   await page.getByTestId("blur-background").check()
+  await page.getByRole("radiogroup", { name: "Blur strength" }).getByText("Light").click()
   await expect(page.locator(".campreview [data-testid=blur-canvas][data-ready=true]")).toBeAttached({ timeout: 30_000 })
   const view = await startRecording(page)
   // The camera bubble is in the floating window (or in this tab where that isn't available).
@@ -593,7 +610,7 @@ test("12. Cancel saves nothing; Restart keeps only the second take, with the bac
   expect(all).toHaveLength(1)
   expect(all[0].durationMs).toBeGreaterThan(1_200)
   expect(all[0].durationMs).toBeLessThan(3_500)
-  expect(all[0].overlay.blur).toBe(true)
+  expect(all[0].overlay).toMatchObject({ blur: true, blurStrength: "light" })
   expect(Object.keys(await opfsFiles(page))).toEqual([all[0].id])
   // The editor opens with the blur on.
   await expect(page.locator("[data-testid=bubble] [data-testid=blur-canvas][data-ready=true]")).toBeAttached({ timeout: 30_000 })

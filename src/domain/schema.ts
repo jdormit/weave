@@ -4,6 +4,10 @@ import { Effect, Schema } from "effect"
 export const OverlayShape = Schema.Literals(["circle", "rounded"])
 export type OverlayShape = typeof OverlayShape.Type
 
+/** How strongly the camera's background is blurred. */
+export const BlurStrength = Schema.Literals(["light", "strong"])
+export type BlurStrength = typeof BlurStrength.Type
+
 export const Overlay = Schema.Struct({
   /** Left edge of the bubble, as a fraction of the frame width. */
   x: Schema.Number,
@@ -14,7 +18,9 @@ export const Overlay = Schema.Struct({
   shape: OverlayShape,
   visible: Schema.Boolean,
   /** Blur the camera's background. Recordings saved before this option existed decode as false. */
-  blur: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false)))
+  blur: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+  /** Recordings saved before this option existed used the strong blur. */
+  blurStrength: BlurStrength.pipe(Schema.withDecodingDefaultKey(Effect.succeed("strong" as const)))
 })
 export type Overlay = typeof Overlay.Type
 
@@ -24,7 +30,8 @@ export const defaultOverlay: Overlay = {
   size: 0.28,
   shape: "circle",
   visible: true,
-  blur: false
+  blur: false,
+  blurStrength: "light"
 }
 
 export const TranscriptStatus = Schema.Literals(["none", "running", "done", "error"])
@@ -153,7 +160,8 @@ export const Settings = Schema.Struct({
   includeSystemAudio: Schema.Boolean,
   showCutWords: Schema.Boolean,
   /** Blur the camera's background in new recordings. */
-  blurBackground: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false)))
+  blurBackground: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+  blurStrength: BlurStrength.pipe(Schema.withDecodingDefaultKey(Effect.succeed("light" as const)))
 })
 export type Settings = typeof Settings.Type
 
@@ -165,7 +173,8 @@ export const defaultSettings: Settings = {
   micId: "default",
   includeSystemAudio: true,
   showCutWords: true,
-  blurBackground: false
+  blurBackground: false,
+  blurStrength: "light"
 }
 
 /** The JSON transcript export, which can be re-imported later. */
