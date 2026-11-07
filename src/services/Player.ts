@@ -38,6 +38,8 @@ export interface PlayerOptions {
 /** How far ahead to look for a cut, so a skip lands before the cut is seen or heard. */
 const LOOKAHEAD_MS = 40
 const SYNC_TOLERANCE_MS = 120
+/** An end this much before the video's duration is taken to be early (see resumeEarlyEnd). */
+const EARLY_END_MS = 100
 
 /**
  * Keeps the screen and camera videos in sync, jumps over cuts during
@@ -72,6 +74,34 @@ const makeController = (
   let cameraActive = true
   const now = () => screen.currentTime * 1000
   const emit = () => timeListeners.forEach((f) => f(now()))
+
+  /** The last source time seen while playing, and when it was seen. */
+  let lastSeen: { ms: number; at: number } | null = null
+  const see = () => {
+    if (!screen.paused && !screen.seeking) lastSeen = { ms: now(), at: performance.now() }
+  }
+  /** Where the video resumed after its last early end, so an end there again isn't retried forever. */
+  let resumedAt = -Infinity
+
+  /**
+   * Chrome sometimes ends a video with no sound track early, 1 to 1.5 seconds
+   * before its last frame, the first time it plays through. Screen recordings
+   * of a mostly still screen trigger it: the browser only records a frame when
+   * something changes, so frames come about once a second, unevenly spaced.
+   * When the video ends well before where it should be by now, this plays on
+   * from there instead (which Chrome then does to the end), so the camera,
+   * the voice and a take in progress all keep going.
+   */
+  const resumeEarlyEnd = (): boolean => {
+    if (!screen.ended || lastSeen === null || stopAt !== null) return false
+    const expected = lastSeen.ms + (performance.now() - lastSeen.at) * rateAt(speed, lastSeen.ms)
+    const end = Math.min(options.durationMs, screen.duration * 1000)
+    if (expected >= end - EARLY_END_MS || expected <= resumedAt + EARLY_END_MS) return false
+    resumedAt = expected
+    screen.currentTime = expected / 1000
+    void screen.play().catch(() => {})
+    return true
+  }
 
   /** Sets each video's playback rate for the current time. */
   const syncRate = () => {
@@ -140,6 +170,7 @@ const makeController = (
   // Check for cuts on every presented frame.
   const onFrame = () => {
     if (destroyed) return
+    see()
     if (!screen.paused) {
       skipCuts()
       syncVolume()
@@ -152,6 +183,7 @@ const makeController = (
   let raf = 0
   const tick = () => {
     if (destroyed) return
+    see()
     if (!screen.paused) {
       skipCuts()
       syncRate()
@@ -168,6 +200,9 @@ const makeController = (
     playingListeners.forEach((f) => f(true))
   }
   const onPause = () => {
+    // Chrome fires pause and then ended. After an early end the video is
+    // playing again by the time ended arrives, and it's ignored.
+    if (!screen.paused || resumeEarlyEnd()) return
     camera?.pause()
     syncCamera(true)
     playingListeners.forEach((f) => f(false))
@@ -183,12 +218,20 @@ const makeController = (
   screen.addEventListener("pause", onPause)
   screen.addEventListener("seeked", onSeeked)
   screen.addEventListener("ended", onPause)
+  // Time updates keep coming in a background tab, where animation frames stop.
+  screen.addEventListener("timeupdate", see)
+  // A jump (a seek, a cut skipped) makes the last time seen meaningless for judging an end.
+  const onSeeking = () => {
+    lastSeen = null
+  }
+  screen.addEventListener("seeking", onSeeking)
 
   return {
     play: () => {
       const t = now()
       // Restart from the beginning when at the end.
       if (t >= options.durationMs - 50) screen.currentTime = 0
+      resumedAt = -Infinity
       skipCuts()
       syncRate()
       syncVolume()
@@ -209,6 +252,7 @@ const makeController = (
     playRange: (from, to) => {
       screen.currentTime = from / 1000
       stopAt = to
+      resumedAt = -Infinity
       syncRate()
       syncVolume()
       syncCamera(true)
@@ -248,6 +292,8 @@ const makeController = (
       screen.removeEventListener("pause", onPause)
       screen.removeEventListener("seeked", onSeeked)
       screen.removeEventListener("ended", onPause)
+      screen.removeEventListener("timeupdate", see)
+      screen.removeEventListener("seeking", onSeeking)
       timeListeners.clear()
       playingListeners.clear()
       activeListeners.clear()
